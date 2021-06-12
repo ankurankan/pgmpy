@@ -241,7 +241,7 @@ class TreeSearch(StructureEstimator):
         indices = np.triu_indices(n_vars, k=1)
         weights[indices] = vals
         weights.T[indices] = vals
-        
+
         return weights
 
     @staticmethod
