@@ -10,8 +10,10 @@ class MG(nx.MultiDiGraph):
     nodes in opposite directions.
     """
 
-    def __init__(self, ebunch=None):
+    def __init__(self, ebunch=None, latents=set()):
         super(MG, self).__init__(ebunch)
+        self.latents = set(latents)
+        # Check for cycles
 
     def add_node(self, node, weight=None):
         """
