@@ -3,17 +3,23 @@
 import networkx as nx
 
 
-class MG(nx.MultiDiGraph):
+class MixedGraph(nx.MultiDiGraph):
     """
     Class representing a Mixed Graph. A mixed graph can contain both a directed edge and
     a bi-directed edge. Bi-directed edges are represented using two edges between the same
     nodes in opposite directions.
     """
-
     def __init__(self, ebunch=None, latents=set()):
-        super(MG, self).__init__(ebunch)
+        # TODO: Check why init is not taking the arguments directly.
+        super(MixedGraph, self).__init__()
+        self.add_edges_from(ebunch)
         self.latents = set(latents)
-        # Check for cycles
+
+        # Check for cycles.
+        try:
+            cycles = list(nx.find_cycle(self))
+        except nx.NetworkXNoCycle:
+            pass
 
     def add_node(self, node, weight=None):
         """
@@ -29,8 +35,8 @@ class MG(nx.MultiDiGraph):
 
         Examples
         --------
-        >>> from pgmpy.base import MG
-        >>> G = MG()
+        >>> from pgmpy.base import MixedGraph
+        >>> G = MixedGraph()
         >>> G.add_node(node='A')
         >>> sorted(G.nodes())
         ['A']
@@ -44,9 +50,9 @@ class MG(nx.MultiDiGraph):
         >>> G.nodes['A']
         {'weight': None}
         """
-        super(MG, self).add_node(node, weight=weight)
+        super(MixedGraph, self).add_node(node, weight=weight)
 
-    def add_nodes_from(self, nodes, weigths=None):
+    def add_nodes_from(self, nodes, weights=None):
         """
         Add multiple nodes to the Graph.
 
@@ -65,7 +71,7 @@ class MG(nx.MultiDiGraph):
         Examples
         --------
         >>> from pgmpy.base import DAG
-        >>> G = MG()
+        >>> G = MixedGraph()
         >>> G.add_nodes_from(nodes=['A', 'B', 'C'])
         >>> G.nodes()
         NodeView(('A', 'B', 'C'))
@@ -109,8 +115,8 @@ class MG(nx.MultiDiGraph):
 
         Examples
         --------
-        >>> from pgmpy.base import MG
-        >>> G = MG()
+        >>> from pgmpy.base import MixedGraph
+        >>> G = MixedGraph()
         >>> G.add_nodes_from(nodes=['Alice', 'Bob', 'Charles'])
         >>> G.add_edge(u='Alice', v='Bob')
         >>> G.nodes()
@@ -130,7 +136,7 @@ class MG(nx.MultiDiGraph):
         >>> G.edge['Ankur']['Maria']
         {'weight': 0.1}
         """
-        super(DAG, self).add_edge(u, v, weight=weight)
+        super(MixedGraph, self).add_edge(u, v, weight=weight)
 
     def add_edges_from(self, ebunch, weights=None):
         """
@@ -154,8 +160,8 @@ class MG(nx.MultiDiGraph):
 
         Examples
         --------
-        >>> from pgmpy.base import MG
-        >>> G = MG()
+        >>> from pgmpy.base import MixedGraph
+        >>> G = MixedGraph()
         >>> G.add_nodes_from(nodes=['Alice', 'Bob', 'Charles'])
         >>> G.add_edges_from(ebunch=[('Alice', 'Bob'), ('Bob', 'Charles')])
         >>> G.nodes()
@@ -192,7 +198,7 @@ class MG(nx.MultiDiGraph):
                 self.add_edge(edge[0], edge[1])
 
 
-class MAG(nx.MultiDiGraph):
+class MAG(MixedGraph):
     """
     Class representing Maximal Ancestral Graph (MAG)[1].
 
@@ -200,6 +206,19 @@ class MAG(nx.MultiDiGraph):
     ----------
     [1] Zhang, Jiji. "Causal reasoning with ancestral graphs." Journal of Machine Learning Research 9 (2008): 1437-1474.
     """
-
-    def __init__(self, ebunch=None):
+    def __init__(self, ebunch=None, latents=set()):
+        super(MAG, self).__init__(ebunch=directed_ebunch, latents=latents)
         pass
+
+
+class PAG(MixedGraph):
+    """
+    Class representing Partial Ancestral Graph (PAG)[1].
+
+    References
+    ----------
+    [1] Zhang, Jiji. "Causal reasoning with ancestral graphs." Journal of Machine Learning Research 9 (2008): 1437-1474.
+    """
+    def __init__(self, directed_ebunch=None, undirected_ebunch=None, latents=set()):
+        super(PAG, self).__init__(ebunch=directed_ebunch, latents=latents)
+        self.undirected_edges = set(undirected_ebunch)
