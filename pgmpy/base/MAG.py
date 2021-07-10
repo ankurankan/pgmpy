@@ -2,13 +2,19 @@
 
 import networkx as nx
 
+from pgmpy.base import DAG
+
 
 class MixedGraph(nx.MultiDiGraph):
     """
-    Class representing a Mixed Graph. A mixed graph can contain both a directed edge and
-    a bi-directed edge. Bi-directed edges are represented using two edges between the same
-    nodes in opposite directions.
+    Class representing a Mixed Graph. A mixed graph can contain both a directed
+    edge and a bi-directed edge. Bi-directed edges are represented using two
+    edges between the same nodes in opposite directions. All the operations are
+    although done on a canonical representation of the Mixed Graph which is a
+    DAG. The canonical representation replaces each bidirected edge with a
+    latent variable.  For example: A <-> B is converted to A <- _e_AB -> B.
     """
+
     def __init__(self, ebunch=None, latents=set()):
         """
         Initialzies a Mixed Graph.
@@ -27,14 +33,48 @@ class MixedGraph(nx.MultiDiGraph):
         """
         # TODO: Check why init is not taking the arguments directly.
         super(MixedGraph, self).__init__()
+        if ebunch is None:
+            ebunch = []
         self.add_edges_from(ebunch)
         self.latents = set(latents)
+        self.canonical = self.to_canonical()
 
-        # Check for cycles.
         try:
-            cycles = list(nx.find_cycle(self))
+            cycles = list(nx.find_cycle(self.canonical))
         except nx.NetworkXNoCycle:
             pass
+        else:
+            out_str = "Cycles are not allowed in a DAG."
+            out_str += "\nEdges indicating the path taken for a loop: "
+            out_str += "".join([f"({u},{v}) " for (u, v) in cycles])
+            raise ValueError(out_str)
+
+    def to_canonical(self):
+        """
+        Converts a mixed graph into it's canonical representation.
+        For each bi-directed edge, a latent variable is added as.
+        For example: A <-> B is converted to A <- _e_AB -> B.
+
+        Examples
+        --------
+        >>> from pgmpy.base import MixedGraph
+        >>> G = MixedGraph([("A", "B"), ("B", "C"), ("A", "C"), ("C", "A")])
+        >>> G_can = G.to_canonical()
+        >>> G_can.nodes()
+        >>> G_can.edges()
+        """
+        new_latents = set()
+        edge_set = set(self.edges())
+        for u, v in self.edges():
+            if (v, u) in edge_set:
+                sorted_names = sorted([u, v])
+                latent_node = f"_e_{str(sorted_names[0])}{str(sorted_names[1])}"
+                new_latents.add(latent_node)
+
+                edge_set.update([(latent_node, u), (latent_node, v)])
+                edge_set -= set([(u, v), (v, u)])
+
+        return DAG(ebunch=edge_set, latents=self.latents.union(new_latents))
 
     def add_node(self, node, weight=None):
         """
@@ -221,6 +261,7 @@ class MAG(MixedGraph):
     ----------
     [1] Zhang, Jiji. "Causal reasoning with ancestral graphs." Journal of Machine Learning Research 9 (2008): 1437-1474.
     """
+
     def __init__(self, ebunch=None, latents=set()):
         super(MAG, self).__init__(ebunch=directed_ebunch, latents=latents)
         pass
@@ -234,6 +275,7 @@ class PAG(MixedGraph):
     ----------
     [1] Zhang, Jiji. "Causal reasoning with ancestral graphs." Journal of Machine Learning Research 9 (2008): 1437-1474.
     """
+
     def __init__(self, directed_ebunch=None, undirected_ebunch=None, latents=set()):
         super(PAG, self).__init__(ebunch=directed_ebunch, latents=latents)
         self.undirected_edges = set(undirected_ebunch)
