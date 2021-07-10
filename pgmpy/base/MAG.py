@@ -10,6 +10,21 @@ class MixedGraph(nx.MultiDiGraph):
     nodes in opposite directions.
     """
     def __init__(self, ebunch=None, latents=set()):
+        """
+        Initialzies a Mixed Graph.
+
+        Parameters
+        ----------
+
+        ebunch: input graph
+            Data to initialize graph.  If data=None (default) an empty
+            graph is created.  The data can be an edge list, or any
+            NetworkX graph object. For bidirected edges e.g. X <-> Y, two
+            edges need to be specified: X -> Y and Y <- X.
+
+        latents: set, array-like
+            List of variables which are latent (i.e. unobserved) in the model.
+        """
         # TODO: Check why init is not taking the arguments directly.
         super(MixedGraph, self).__init__()
         self.add_edges_from(ebunch)
