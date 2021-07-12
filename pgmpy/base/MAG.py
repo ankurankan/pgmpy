@@ -9,6 +9,7 @@ class MixedGraph(nx.MultiDiGraph):
     a bi-directed edge. Bi-directed edges are represented using two edges between the same
     nodes in opposite directions.
     """
+
     def __init__(self, ebunch=None, latents=set()):
         # TODO: Check why init is not taking the arguments directly.
         super(MixedGraph, self).__init__()
@@ -206,6 +207,7 @@ class MAG(MixedGraph):
     ----------
     [1] Zhang, Jiji. "Causal reasoning with ancestral graphs." Journal of Machine Learning Research 9 (2008): 1437-1474.
     """
+
     def __init__(self, ebunch=None, latents=set()):
         super(MAG, self).__init__(ebunch=directed_ebunch, latents=latents)
         pass
@@ -219,6 +221,7 @@ class PAG(MixedGraph):
     ----------
     [1] Zhang, Jiji. "Causal reasoning with ancestral graphs." Journal of Machine Learning Research 9 (2008): 1437-1474.
     """
+
     def __init__(self, directed_ebunch=None, undirected_ebunch=None, latents=set()):
         super(PAG, self).__init__(ebunch=directed_ebunch, latents=latents)
         self.undirected_edges = set(undirected_ebunch)
