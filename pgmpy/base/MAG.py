@@ -37,17 +37,18 @@ class MixedGraph(nx.MultiDiGraph):
             ebunch = []
         self.add_edges_from(ebunch)
         self.latents = set(latents)
-        self.canonical = self.to_canonical()
 
-        try:
-            cycles = list(nx.find_cycle(self.canonical))
-        except nx.NetworkXNoCycle:
-            pass
-        else:
-            out_str = "Cycles are not allowed in a DAG."
-            out_str += "\nEdges indicating the path taken for a loop: "
-            out_str += "".join([f"({u},{v}) " for (u, v) in cycles])
-            raise ValueError(out_str)
+    def copy(self):
+        """
+        Returns a copy of the current object.
+
+        Examples
+        --------
+        >>> from pgmpy.base import MixedGraph
+        >>> G = MixedGraph([("A", "B"), ("A", "B"), ("B", "A")])
+        >>> G_copy = G.copy()
+        """
+        return MixedGraph(ebunch=self.edges(), latents=self.latents)
 
     def to_canonical(self):
         """
@@ -59,22 +60,25 @@ class MixedGraph(nx.MultiDiGraph):
         --------
         >>> from pgmpy.base import MixedGraph
         >>> G = MixedGraph([("A", "B"), ("B", "C"), ("A", "C"), ("C", "A")])
-        >>> G_can = G.to_canonical()
-        >>> G_can.nodes()
-        >>> G_can.edges()
+        >>> G_canonical = G.to_canonical()
+        >>> G_canonical.nodes()
+        >>> G_canonical.edges()
         """
-        new_latents = set()
-        edge_set = set(self.edges())
+        bidirected_edges = []
         for u, v in self.edges():
-            if (v, u) in edge_set:
-                sorted_names = sorted([u, v])
-                latent_node = f"_e_{str(sorted_names[0])}{str(sorted_names[1])}"
-                new_latents.add(latent_node)
+            if (v, u) in self.edges():
+                bidirected_edges.append(tuple(sorted([u, v])))
 
-                edge_set.update([(latent_node, u), (latent_node, v)])
-                edge_set -= set([(u, v), (v, u)])
+        G = self.copy()
+        new_latents = set()
+        for u, v in set(bidirected_edges):
+            latent_node = f"_e_{str(u)}{str(v)}"
+            new_latents.add(latent_node)
 
-        return DAG(ebunch=edge_set, latents=self.latents.union(new_latents))
+            G.add_edges_from([(latent_node, u), (latent_node, v)])
+            G.remove_edges_from([(u, v), (v, u)])
+
+        return DAG(ebunch=G.edges(), latents=self.latents.union(new_latents))
 
     def add_node(self, node, weight=None):
         """
@@ -251,6 +255,36 @@ class MixedGraph(nx.MultiDiGraph):
         else:
             for edge in ebunch:
                 self.add_edge(edge[0], edge[1])
+
+    def get_spouse(self, node):
+        """
+        Returns the spouse of `node`. Spouse in mixed graph is defined as
+        the nodes connected to `node` through a bi-directed edge.
+
+        Parameters
+        ----------
+        node: any hashable python object
+            The node whose spouses are needed.
+
+        Returns
+        -------
+        list: List of spouses of `node`.
+
+        Examples
+        --------
+        >>> from pgmpy.base import MixedGraph
+        >>> g = MixedGraph([('X', 'Y'), ('Y', 'Z'), ('X', 'Z'), ('Z', 'X')])
+        >>> g.get_spouse('X')
+        ['Z']
+        >>> g.get_spouse('Y')
+        []
+        """
+        spouses = []
+        for neigh in self.neighbors(node):
+            if node in self.neighbors(neigh):
+                spouses.append(neigh)
+
+        return spouses
 
 
 class MAG(MixedGraph):

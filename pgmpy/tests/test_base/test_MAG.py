@@ -13,47 +13,57 @@ class TestMixedGraphCreation(unittest.TestCase):
         self.assertEqual(set(G.nodes()), set(["A", "B", "C"]))
         self.assertEqual(set(G.edges()), set([("A", "B"), ("B", "C")]))
         self.assertEqual(G.latents, set())
-        self.assertEqual(set(G.canonical.nodes()), set(["A", "B", "C"]))
-        self.assertEqual(set(G.canonical.edges()), set([("A", "B"), ("B", "C")]))
-        self.assertEqual(G.canonical.latents, set())
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set(["A", "B", "C"]))
+        self.assertEqual(set(G_canonical.edges()), set([("A", "B"), ("B", "C")]))
+        self.assertEqual(G_canonical.latents, set())
 
         # Graph 1: With latents
         G = MixedGraph([("A", "B"), ("B", "C")], latents=["B"])
         self.assertEqual(set(G.nodes()), set(["A", "B", "C"]))
         self.assertEqual(set(G.edges()), set([("A", "B"), ("B", "C")]))
         self.assertEqual(G.latents, set(["B"]))
-        self.assertEqual(set(G.canonical.nodes()), set(["A", "B", "C"]))
-        self.assertEqual(set(G.canonical.edges()), set([("A", "B"), ("B", "C")]))
-        self.assertEqual(G.canonical.latents, set(["B"]))
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set(["A", "B", "C"]))
+        self.assertEqual(set(G_canonical.edges()), set([("A", "B"), ("B", "C")]))
+        self.assertEqual(G_canonical.latents, set(["B"]))
 
         # Graph 2: Without latents
         G = MixedGraph([(1, 2), (2, 3)])
         self.assertEqual(set(G.nodes()), set([1, 2, 3]))
         self.assertEqual(set(G.edges()), set([(1, 2), (2, 3)]))
         self.assertEqual(G.latents, set())
-        self.assertEqual(set(G.canonical.nodes()), set([1, 2, 3]))
-        self.assertEqual(set(G.canonical.edges()), set([(1, 2), (2, 3)]))
-        self.assertEqual(G.canonical.latents, set())
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set([1, 2, 3]))
+        self.assertEqual(set(G_canonical.edges()), set([(1, 2), (2, 3)]))
+        self.assertEqual(G_canonical.latents, set())
 
         # Graph 2: With latents
         G = MixedGraph([(1, 2), (2, 3)], latents=set([2]))
         self.assertEqual(set(G.nodes()), set([1, 2, 3]))
         self.assertEqual(set(G.edges()), set([(1, 2), (2, 3)]))
         self.assertEqual(G.latents, set([2]))
-        self.assertEqual(set(G.canonical.nodes()), set([1, 2, 3]))
-        self.assertEqual(set(G.canonical.edges()), set([(1, 2), (2, 3)]))
-        self.assertEqual(G.canonical.latents, set([2]))
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set([1, 2, 3]))
+        self.assertEqual(set(G_canonical.edges()), set([(1, 2), (2, 3)]))
+        self.assertEqual(G_canonical.latents, set([2]))
 
         # Graph 3: Without latents
         G = MixedGraph([((1, 2), (3, 4)), ((3, 4), (5, 6))])
         self.assertEqual(set(G.nodes()), set([(1, 2), (3, 4), (5, 6)]))
         self.assertEqual(set(G.edges()), set([((1, 2), (3, 4)), ((3, 4), (5, 6))]))
         self.assertEqual(G.latents, set())
-        self.assertEqual(set(G.canonical.nodes()), set([(1, 2), (3, 4), (5, 6)]))
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set([(1, 2), (3, 4), (5, 6)]))
         self.assertEqual(
-            set(G.canonical.edges()), set([((1, 2), (3, 4)), ((3, 4), (5, 6))])
+            set(G_canonical.edges()), set([((1, 2), (3, 4)), ((3, 4), (5, 6))])
         )
-        self.assertEqual(G.canonical.latents, set())
+        self.assertEqual(G_canonical.latents, set())
 
         # Graph 3: With latents
         G = MixedGraph(
@@ -74,12 +84,14 @@ class TestMixedGraphCreation(unittest.TestCase):
                 ]
             ),
         )
-        self.assertEqual(set(G.canonical.nodes()), set([(1, 2), (3, 4), (5, 6)]))
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set([(1, 2), (3, 4), (5, 6)]))
         self.assertEqual(
-            set(G.canonical.edges()), set([((1, 2), (3, 4)), ((3, 4), (5, 6))])
+            set(G_canonical.edges()), set([((1, 2), (3, 4)), ((3, 4), (5, 6))])
         )
         self.assertEqual(
-            G.canonical.latents,
+            G_canonical.latents,
             set(
                 [
                     (3, 4),
@@ -95,13 +107,15 @@ class TestMixedGraphCreation(unittest.TestCase):
             set(G.edges()), set([("A", "B"), ("B", "C"), ("A", "C"), ("C", "A")])
         )
         self.assertEqual(G.latents, set())
-        self.assertEqual(set(G.canonical.nodes()), set(["A", "B", "C", "_e_AC"]))
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set(["A", "B", "C", "_e_AC"]))
         self.assertEqual(
-            set(G.canonical.edges()),
+            set(G_canonical.edges()),
             set([("A", "B"), ("B", "C"), ("_e_AC", "A"), ("_e_AC", "C")]),
         )
         self.assertEqual(
-            G.canonical.latents,
+            G_canonical.latents,
             set(
                 [
                     "_e_AC",
@@ -123,24 +137,27 @@ class TestMixedGraphCreation(unittest.TestCase):
                 ]
             ),
         )
-        self.assertEqual(set(G.canonical.nodes()), set(["A", "B", "C", "_e_AC"]))
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set(["A", "B", "C", "_e_AC"]))
         self.assertEqual(
-            set(G.canonical.edges()),
+            set(G_canonical.edges()),
             set([("A", "B"), ("B", "C"), ("_e_AC", "A"), ("_e_AC", "C")]),
         )
-        self.assertEqual(G.canonical.latents, set(["_e_AC", "B"]))
+        self.assertEqual(G_canonical.latents, set(["_e_AC", "B"]))
 
         # Graph 2: Without latents
         G = MixedGraph([(1, 2), (2, 3), (1, 3), (3, 1)])
         self.assertEqual(set(G.nodes()), set([1, 2, 3]))
         self.assertEqual(set(G.edges()), set([(1, 2), (2, 3), (1, 3), (3, 1)]))
         self.assertEqual(G.latents, set())
-        self.assertEqual(set(G.canonical.nodes()), set([1, 2, 3, "_e_13"]))
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set([1, 2, 3, "_e_13"]))
         self.assertEqual(
-            set(G.canonical.edges()), set([(1, 2), (2, 3), ("_e_13", 1), ("_e_13", 3)])
+            set(G_canonical.edges()), set([(1, 2), (2, 3), ("_e_13", 1), ("_e_13", 3)])
         )
         self.assertEqual(
-            G.canonical.latents,
+            G_canonical.latents,
             set(
                 [
                     "_e_13",
@@ -153,11 +170,13 @@ class TestMixedGraphCreation(unittest.TestCase):
         self.assertEqual(set(G.nodes()), set([1, 2, 3]))
         self.assertEqual(set(G.edges()), set([(1, 2), (2, 3), (3, 1), (1, 3)]))
         self.assertEqual(G.latents, set([2]))
-        self.assertEqual(set(G.canonical.nodes()), set([1, 2, 3, "_e_13"]))
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(set(G_canonical.nodes()), set([1, 2, 3, "_e_13"]))
         self.assertEqual(
-            set(G.canonical.edges()), set([(1, 2), (2, 3), ("_e_13", 1), ("_e_13", 3)])
+            set(G_canonical.edges()), set([(1, 2), (2, 3), ("_e_13", 1), ("_e_13", 3)])
         )
-        self.assertEqual(G.canonical.latents, set(["_e_13", 2]))
+        self.assertEqual(G_canonical.latents, set(["_e_13", 2]))
 
         # Graph 3: Without latents
         G = MixedGraph(
@@ -171,11 +190,13 @@ class TestMixedGraphCreation(unittest.TestCase):
             ),
         )
         self.assertEqual(G.latents, set())
+
+        G_canonical = G.to_canonical()
         self.assertEqual(
-            set(G.canonical.nodes()), set([(1, 2), (3, 4), (5, 6), "_e_(1, 2)(5, 6)"])
+            set(G_canonical.nodes()), set([(1, 2), (3, 4), (5, 6), "_e_(1, 2)(5, 6)"])
         )
         self.assertEqual(
-            set(G.canonical.edges()),
+            set(G_canonical.edges()),
             set(
                 [
                     ((1, 2), (3, 4)),
@@ -186,7 +207,7 @@ class TestMixedGraphCreation(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            G.canonical.latents,
+            G_canonical.latents,
             set(
                 [
                     "_e_(1, 2)(5, 6)",
@@ -216,11 +237,13 @@ class TestMixedGraphCreation(unittest.TestCase):
                 ]
             ),
         )
+
+        G_canonical = G.to_canonical()
         self.assertEqual(
-            set(G.canonical.nodes()), set([(1, 2), (3, 4), (5, 6), "_e_(1, 2)(5, 6)"])
+            set(G_canonical.nodes()), set([(1, 2), (3, 4), (5, 6), "_e_(1, 2)(5, 6)"])
         )
         self.assertEqual(
-            set(G.canonical.edges()),
+            set(G_canonical.edges()),
             set(
                 [
                     ((1, 2), (3, 4)),
@@ -230,4 +253,27 @@ class TestMixedGraphCreation(unittest.TestCase):
                 ]
             ),
         )
-        self.assertEqual(G.canonical.latents, set(["_e_(1, 2)(5, 6)", (3, 4)]))
+        self.assertEqual(G_canonical.latents, set(["_e_(1, 2)(5, 6)", (3, 4)]))
+
+    def test_both_dir_bidir(self):
+        G = MixedGraph([("X", "Y"), ("X", "Y"), ("Y", "X")])
+        self.assertEqual(G.number_of_edges(), 3)
+        self.assertEqual(G.number_of_nodes(), 2)
+
+        G_canonical = G.to_canonical()
+        self.assertEqual(
+            set(G_canonical.edges()), set([("X", "Y"), ("_e_XY", "X"), ("_e_XY", "Y")])
+        )
+        self.assertEqual(G_canonical.latents, set(["_e_XY"]))
+        self.assertEqual(G_canonical.number_of_edges(), 3)
+        self.assertEqual(G_canonical.number_of_nodes(), 3)
+
+
+class TestMixedGraphMethod(unittest.TestCase):
+    def setUp(self):
+        self.model = MixedGraph([("X", "Y"), ("Y", "Z"), ("X", "Z"), ("Z", "X")])
+
+    def test_get_spouse(self):
+        self.assertEqual(self.model.get_spouse("X"), ["Z"])
+        self.assertEqual(self.model.get_spouse("Y"), [])
+        self.assertEqual(self.model.get_spouse("Z"), ["X"])
