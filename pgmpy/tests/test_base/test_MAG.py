@@ -272,7 +272,9 @@ class TestMixedGraphCreation(unittest.TestCase):
 class TestMixedGraphMethod(unittest.TestCase):
     def setUp(self):
         self.model1 = MixedGraph([("X", "Y"), ("Y", "Z"), ("X", "Z"), ("Z", "X")])
-        self.model2 = MixedGraph([("X", "Y"), ("Y", "Z"), ("X", "Z"), ("Z", "X"), ("Y", "Z"), ("Z", "Y")])
+        self.model2 = MixedGraph(
+            [("X", "Y"), ("Y", "Z"), ("X", "Z"), ("Z", "X"), ("Y", "Z"), ("Z", "Y")]
+        )
 
     def test_get_spouse(self):
         self.assertEqual(self.model1.get_spouse("X"), ["Z"])
@@ -282,4 +284,3 @@ class TestMixedGraphMethod(unittest.TestCase):
         self.assertEqual(self.model2.get_spouse("X"), ["Z"])
         self.assertEqual(self.model2.get_spouse("Y"), ["Z"])
         self.assertEqual(sorted(self.model2.get_spouse("Z")), ["X", "Y"])
-
