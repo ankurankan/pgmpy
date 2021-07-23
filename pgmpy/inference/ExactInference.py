@@ -4,7 +4,7 @@ import itertools
 
 import networkx as nx
 import numpy as np
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 
 from pgmpy.factors import factor_product
 from pgmpy.inference import Inference
