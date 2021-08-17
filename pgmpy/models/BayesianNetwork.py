@@ -1014,19 +1014,40 @@ class BayesianNetwork(DAG):
         show_progress=True,
     ):
         """
-        Simulates data from the given model. Internally uses
-        BayesianModelSampling.forward_sample to generate the data.
+        Simulates data from the given model. Internally uses methods from
+        pgmpy.sampling.BayesianModelSampling to generate the data.
 
         Parameters
         ----------
         n_samples: int
             The number of data samples to simulate from the model.
 
+        do: dict
+            The interventions to apply to the model. dict should be of the form
+            {variable_name: state}
+
+        evidence: dict
+            Observed evidence to apply to the model. dict should be of the form
+            {variable_name: state}
+
+        virtual_evidence: list
+            Probabilistically apply evidence to the model. `virtual_evidence` should
+            be a list of `pgmpy.factors.discrete.TabularCPD` objects specifying the
+            virtual probabilities.
+
+        virtual_intervention: list
+            Also known as soft intervention. `virtual_intervention` should be a list
+            of `pgmpy.factors.discrete.TabularCPD` objects specifying the virtual/soft
+            intervention probabilities.
+
         include_latents: boolean
             Whether to include the latent variable values in the generated samples.
 
         seed: int (default: None)
             If a value is provided, sets the seed for numpy.random.
+
+        show_progress: bool
+            If True, shows a progress bar when generating samples.
 
         Returns
         -------
@@ -1035,9 +1056,25 @@ class BayesianNetwork(DAG):
         Examples
         --------
         >>> from pgmpy.utils import get_example_model
-        >>> model = get_example_model('asia')
+
+        Simulation without and evidence or intervention
+        >>> model = get_example_model('alarm')
         >>> model.simulate(n_samples=10)
 
+        Simulation with the hard evidence: MINVOLSET = HIGH
+        >>> model.simulate(n_samples=10, evidence={"MINVOLSET": "HIGH"})
+
+        Simulation with hard intervention: CVP = LOW
+        >>> model.simulate(n_samples=10, do={"CVP": "LOW"})
+
+        Simulation with virtual/soft evidence: p(MINVOLSET=LOW) = 0.8, p(MINVOLSET=HIGH) = 0.2,
+        p(MINVOLSET=NORMAL) = 0
+        >>> virt_evidence = [TabularCPD("MINVOLSET", 3, [[0.8], [0.0], [0.2]], state_names={"MINVOLSET": ["LOW", "NORMAL", "HIGH"]})]
+        >>> model.simulate(n_samples, virtual_evidence=virt_evidence)
+
+        Simulation with virtual/soft intervention: p(CVP=LOW) = 0.2, p(CVP=NORMAL)=0.5, p(CVP=HIGH)=0.3
+        >>> virt_intervention = [TabularCPD("CVP", 3, [[0.2], [0.5], [0.3]], state_names={"CVP": ["LOW", "NORMAL", "HIGH"]})]
+        >>> model.simulate(n_samples, virtual_intervention=virt_intervention)
         """
         from pgmpy.sampling import BayesianModelSampling
 
