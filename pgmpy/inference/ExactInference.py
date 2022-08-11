@@ -4,6 +4,7 @@ import itertools
 
 import networkx as nx
 import numpy as np
+import torch
 from opt_einsum import contract
 from tqdm.auto import tqdm
 
@@ -364,8 +365,14 @@ class VariableElimination(Inference):
                         )
                     )
                     einsum_expr.append([var_int_map[var] for var in phi.variables])
+            for i in range(0, len(einsum_expr), 2):
+                einsum_expr[i] = torch.from_numpy(einsum_expr[i])
+
             result_values = contract(
-                *einsum_expr, [var_int_map[var] for var in variables], optimize="greedy"
+                *einsum_expr,
+                [var_int_map[var] for var in variables],
+                backend="torch",
+                optimize="random-greedy-128",
             )
 
             # Step 5.3: Prepare return values.
