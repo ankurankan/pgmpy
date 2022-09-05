@@ -43,6 +43,9 @@ class PC(StructureEstimator):
         variant="stable",
         ci_test="chi_square",
         max_cond_vars=5,
+        fixed_edges=None,
+        white_list=None,
+        black_list=None,
         return_type="dag",
         significance_level=0.01,
         n_jobs=-1,
@@ -80,8 +83,20 @@ class PC(StructureEstimator):
                         only for continuous datasets.
 
         max_cond_vars: int
-            The maximum number of conditional variables allowed to do the statistical
-            test with.
+            The maximum number of conditional variables allowed to do the
+            statistical test with.
+
+        fixed_edges: list
+            List of 2-tuples of edges which should always be in the learned
+            graph.
+
+        white_list: list
+            List of 2-tuples of edges such that final edges in the learned
+            skeleton are a subset of `white_list`.
+
+        black_list: list
+            List of 2-tuples of edges such that these would never be in the
+            final graph.
 
         return_type: str (one of "dag", "cpdag", "pdag", "skeleton")
             The type of structure to return.
@@ -165,10 +180,22 @@ class PC(StructureEstimator):
                 "For using Chi Square or Pearsonr, data arguement must be specified"
             )
 
+        if fixed_edges is not None:
+            fixed_edges = set(fixed_edges)
+        black_list = set() if black_list is None else set(black_list)
+        white_list = (
+            set([(u, v) for u in self.variables for v in self.variables])
+            if white_list is None
+            else set(white_list)
+        )
+
         # Step 1: Run the PC algorithm to build the skeleton and get the separating sets.
         skel, separating_sets = self.build_skeleton(
             ci_test=ci_test,
             max_cond_vars=max_cond_vars,
+            fixed_edges=fixed_edges,
+            white_list=white_list,
+            black_list=black_list,
             significance_level=significance_level,
             variant=variant,
             n_jobs=n_jobs,
@@ -196,6 +223,9 @@ class PC(StructureEstimator):
         self,
         ci_test="chi_square",
         max_cond_vars=5,
+        fixed_edges=None,
+        white_list=None,
+        black_list=None,
         significance_level=0.01,
         variant="stable",
         n_jobs=-1,
@@ -275,8 +305,9 @@ class PC(StructureEstimator):
             pbar = tqdm(total=max_cond_vars)
             pbar.set_description("Working for n conditional variables: 0")
 
-        # Step 1: Initialize a fully connected undirected graph
-        graph = nx.complete_graph(n=self.variables, create_using=nx.Graph)
+        # Step 1: Initialize a fully connected or white_list undirected graph
+        graph = nx.Graph(white_list)
+        # graph = nx.complete_graph(n=self.variables, create_using=nx.Graph)
 
         # Exit condition: 1. If all the nodes in graph has less than `lim_neighbors` neighbors.
         #             or  2. `lim_neighbors` is greater than `max_conditional_variables`.
