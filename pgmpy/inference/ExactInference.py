@@ -357,10 +357,11 @@ class VariableElimination(Inference):
                 var_int_map = {var: i for i, var in enumerate(model_reduced.nodes())}
             einsum_expr = []
             for index, phi in enumerate(factors):
-                einsum_expr.append(
-                    (phi.values[reduce_indexes[index]]).reshape(reshape_indexes[index])
-                )
-                einsum_expr.append([var_int_map[var] for var in phi.variables])
+                if not (phi.variables[0] in list(evidence.keys())):
+                    einsum_expr.append(
+                        (phi.values[reduce_indexes[index]]).reshape(reshape_indexes[index])
+                    )
+                    einsum_expr.append([var_int_map[var] for var in phi.variables])
             result_values = contract(
                 *einsum_expr, [var_int_map[var] for var in variables], optimize="greedy"
             )
