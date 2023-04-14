@@ -1,9 +1,10 @@
-import unittest
 import math
+import unittest
 
 import numpy as np
 import pandas as pd
 from numpy import testing as np_test
+from pandas.api.types import CategoricalDtype
 
 from pgmpy.estimators.CITests import *
 
@@ -77,7 +78,7 @@ class TestPearsonr(unittest.TestCase):
         )
 
 
-class TestChiSquare(unittest.TestCase):
+class TestCITests(unittest.TestCase):
     def setUp(self):
         self.df_adult = pd.read_csv("pgmpy/tests/test_estimators/testdata/adult.csv")
 
@@ -248,3 +249,21 @@ class TestChiSquare(unittest.TestCase):
             stat, p_value, dof = t(X="x", Y="y", Z=[], data=df, boolean=False)
             self.assertEqual(dof, 1)
             np_test.assert_almost_equal(p_value, 0, decimal=5)
+
+
+class TestResidual(unittest.TestCase):
+    def setUp(self):
+        z = np.random.normal(2, 2, 1000)
+        x = z + np.random.normal(0, 0.1, 1000)
+        y = z + np.random.normal(0, 0.1, 1000)
+
+        self.df_cont = pd.DataFrame({"X": x, "Y": y, "Z": z})
+
+        cat_ord = CategoricalDtype(categories=range(int(max(z))), ordered=True)
+        self.df_ord = self.df_cont.round().astype(cat_ord).dropna()
+
+        cat_cat = CategoricalDtype(categories=range(int(max(z))), ordered=False)
+        self.df_cat = self.df_cont.round().astype(cat_cat).dropna()
+
+    def test_residual(self):
+        p_value = residual_test("X", "Y", ["Z"], data=self.df_cont)

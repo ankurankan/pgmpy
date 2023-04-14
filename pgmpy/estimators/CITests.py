@@ -2,7 +2,10 @@ import logging
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_categorical_dtype, is_numeric_dtype
 from scipy import stats
+from scipy.stats.distributions import chi2
+from skranger.ensemble import RangerForestClassifier, RangerForestRegressor
 
 from pgmpy.independencies import IndependenceAssertion
 
@@ -644,3 +647,196 @@ def pearsonr(X, Y, Z, data, boolean=True, **kwargs):
             return False
     else:
         return coef, p_value
+
+
+def residual_test(X, Y, Z, data, boolean=True, **kwargs):
+    r"""
+    A residualization based approach that works on all combination of data types,
+    can use any estimator, and returns a chi-squared test statistic.
+
+    Parameters
+    ----------
+    X: str
+        The first variable for testing the independence condition X \u27C2 Y | Z
+
+    Y: str
+        The second variable for testing the independence condition X \u27C2 Y | Z
+
+    Z: list/array-like
+        A list of conditional variable for testing the condition X \u27C2 Y | Z
+
+    data: pandas.DataFrame
+        The dataset in which to test the indepenedence condition.
+
+    boolean: bool
+        If boolean=True, an additional argument `significance_level` must
+            be specified. If p_value of the test is greater than equal to
+            `significance_level`, returns True. Otherwise returns False.
+
+        If boolean=False, returns the pearson correlation coefficient and p_value
+            of the test.
+
+    Returns
+    -------
+    CI Test results: tuple or bool
+        If boolean=True, returns True if p-value >= significance_level, else False. If
+        boolean=False, returns a tuple of (Chi-Sq test statistic, p-value)
+    """
+    # Step 1: Test if the inputs are correct
+    if not hasattr(Z, "__iter__"):
+        raise ValueError(f"Variable Z. Expected type: iterable. Got type: {type(Z)}")
+    else:
+        Z = list(Z)
+
+    if not isinstance(data, pd.DataFrame):
+        raise ValueError(
+            f"Variable data. Expected type: pandas.DataFrame. Got type: {type(data)}"
+        )
+
+    # Step 2: Check for the data types
+    if is_numeric_dtype(data.loc[:, X]):
+        X_type = "cont"
+    elif is_categorical_dtype(data.loc[:, X]):
+        if data.loc[:, X].dtype.ordered:
+            X_type = "ord"
+        else:
+            X_type = "cat"
+    else:
+        raise ValueError(
+            f"dtype of {X} not recognized. It should either be numeric, ordinal, or categorical"
+        )
+
+    if is_numeric_dtype(data.loc[:, Y]):
+        Y_type = "cont"
+    elif is_categorical_dtype(data.loc[:, Y]):
+        if data.loc[:, Y].dtype.ordered:
+            Y_type = "ord"
+        else:
+            Y_type = "cat"
+    else:
+        raise ValueError(
+            f"dtype of {Y} not recognized. It should either be numeric, ordinal, or categorical"
+        )
+
+    Z_type = []
+    for var in Z:
+        if is_numeric_dtype(data.loc[:, var]):
+            Z_type.append("cont")
+        elif is_categorical_dtype(data.loc[:, var]):
+            if data.loc[:, var].dtype.ordered:
+                Z_type.append("ord")
+            else:
+                Z_type.append("cat")
+        else:
+            raise ValueError(
+                "dtype of {var} not recognized. It should either be numeric, ordinal, or categorical"
+            )
+
+    # Step 3: If either X or Y is categorical, one hot encode them.
+    if X_type == "cat":
+        X = pd.get_dummies(data.loc[:, X]).astype("int")
+    else:
+        X = data.loc[:, [X]]
+
+    if Y_type == "cat":
+        Y = pd.get_dummies(data.loc[:, Y]).astype("int")
+    else:
+        Y = data.loc[:, [Y]]
+
+    # Step 4: Train the estimators and compute residuals
+    if X_type == "cont":
+        residual_x = (
+            X
+            - RangerForestRegressor()
+            .fit(data.loc[:, Z], X)
+            .predict(data.loc[:, Z])
+            .reshape(-1, 1)
+        ).values
+    if Y_type == "cont":
+        residual_y = (
+            Y
+            - RangerForestRegressor()
+            .fit(data.loc[:, Z], Y)
+            .predict(data.loc[:, Z])
+            .reshape(-1, 1)
+        ).values
+
+    if X_type == "ord":
+        pred_x = (
+            RangerForestClassifier()
+            .fit(data.loc[:, Z], X)
+            .predict_proba(data.loc[:, Z])
+        )
+
+        residual_x = np.zeros((pred_x.shape[0], 1), dtype=float)
+        for i in range(pred_x.shape[0]):
+            residual_x[i, 0] = np.sum(pred_x[i, : X.iloc[i, 0]]) - np.sum(
+                pred_x[i, (X.iloc[i, 0] + 1) :]
+            )
+
+    if Y_type == "ord":
+        pred_y = (
+            RangerForestClassifier()
+            .fit(data.loc[:, Z], Y)
+            .predict_proba(data.loc[:, Z])
+        )
+
+        residual_y = np.zeros((pred_y.shape[0], 1), dtype=float)
+        for i in range(pred_y.shape[0]):
+            residual_y[i, 0] = np.sum(pred_y[i, : Y.iloc[i, 0]]) - np.sum(
+                pred_y[i, (Y.iloc[i, 0] + 1) :]
+            )
+
+    if X_type == "cat":
+        residual_x = np.zeros((X.shape[0], X.shape[1] - 1), dtype=float)
+        for i in range(X.shape[1] - 1):
+            pred = (
+                RangerForestClassifier()
+                .fit(data.loc[:, Z], X.iloc[:, [i]])
+                .predict_proba(data.loc[:, Z])
+            )
+            if pred.shape[1] == 1:
+                residual_x[:, i] = 0
+            else:
+                residual_x[:, i] = X.iloc[:, i].values - residual_x[:, 1]
+        residual_x = residual_x[:, ~np.all(residual_x == 0, axis=0)]
+
+    if Y_type == "cat":
+        residual_y = np.zeros((Y.shape[0], Y.shape[1] - 1), dtype=float)
+        for i in range(Y.shape[1] - 1):
+            pred = (
+                RangerForestClassifier()
+                .fit(data.loc[:, Z], Y.iloc[:, [i]])
+                .predict_proba(data.loc[:, Z])
+            )
+            if pred.shape[1] == 1:
+                residual_y[:, i] = 0
+            else:
+                residual_y[:, i] = Y.iloc[:, i].values - residual_y[:, 1]
+        residual_y = residual_y[:, ~np.all(residual_y == 0, axis=0)]
+
+    # Step 5: Compute the test statistic
+    if (residual_x.shape[1] == 1) and (residual_y.shape[1] == 1):
+        chi = (
+            (1 / X.shape[0])
+            * (np.dot(residual_x.ravel(), residual_y.ravel()) ** 2)
+            / (np.var((residual_x * residual_y).ravel()))
+        )
+        return chi2.sf(chi, 1)
+
+    else:
+        d = np.zeros(
+            (X.shape[0], residual_x.shape[1] * residual_y.shape[1]), dtype=float
+        )
+        k = 0
+        for i in range(residual_x.shape[1]):
+            for j in range(residual_y.shape[1]):
+                d[:, k] = residual_x[:, i] * residual_y[:, j]
+
+        chi = (
+            np.linalg.multi_dot(
+                [np.sum(d, axis=0), np.linalg.inv(np.cov(d.T)), np.sum(d, axis=0).T]
+            )
+            / X.shape[0]
+        )
+        return chi2.sf(chi, d.shape[1])
