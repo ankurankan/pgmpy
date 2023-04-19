@@ -681,6 +681,10 @@ def residual_test(X, Y, Z, data, boolean=True, **kwargs):
     CI Test results: tuple or bool
         If boolean=True, returns True if p-value >= significance_level, else False. If
         boolean=False, returns a tuple of (Chi-Sq test statistic, p-value)
+
+    Reference
+    ---------
+    [1] Ankan, Ankur, and Johannes Textor. "A Simple Unified Approach to Testing High-Dimensional Conditional Independences for Categorical and Ordinal Data." arXiv preprint arXiv:2206.04356 (2022).
     """
     # Step 1: Test if the inputs are correct
     if not hasattr(Z, "__iter__"):
@@ -816,15 +820,18 @@ def residual_test(X, Y, Z, data, boolean=True, **kwargs):
         residual_y = residual_y[:, ~np.all(residual_y == 0, axis=0)]
 
     # Step 5: Compute the test statistic
+    # Step 5.1: If both X and Y were continuous and ordinal
     if (residual_x.shape[1] == 1) and (residual_y.shape[1] == 1):
         chi = (
             (1 / X.shape[0])
             * (np.dot(residual_x.ravel(), residual_y.ravel()) ** 2)
             / (np.var((residual_x * residual_y).ravel()))
         )
-        return chi2.sf(chi, 1)
+        p_value = chi2.sf(chi, 1)
 
+    # Step 5.2: If either variables is categorical
     else:
+        # Compute the residual matrix
         d = np.zeros(
             (X.shape[0], residual_x.shape[1] * residual_y.shape[1]), dtype=float
         )
@@ -832,11 +839,24 @@ def residual_test(X, Y, Z, data, boolean=True, **kwargs):
         for i in range(residual_x.shape[1]):
             for j in range(residual_y.shape[1]):
                 d[:, k] = residual_x[:, i] * residual_y[:, j]
+                k += 1
 
-        chi = (
-            np.linalg.multi_dot(
-                [np.sum(d, axis=0), np.linalg.inv(np.cov(d.T)), np.sum(d, axis=0).T]
-            )
-            / X.shape[0]
-        )
-        return chi2.sf(chi, d.shape[1])
+        # Compute square invert matrix.
+        cov_mat = np.cov(d.T)
+        eig_values, eig_vectors = np.linalg.eig(cov_mat)
+        eig_values = (eig_values + np.absolute(eig_values)) / 2
+        eig_values2 = 1 / np.sqrt(eig_values)
+        eig_values2[eig_values == 0] = 0
+        sqinv_cov = eig_vectors @ np.diag(eig_values2) @ eig_vectors.T
+
+        # Compute the test statistic
+        chi = np.sum(np.mean((sqinv_cov @ d.T).T, axis=0) ** 2) * X.shape[0]
+        p_value = chi2.sf(chi, d.shape[1])
+
+    if boolean:
+        if p_value >= kwargs["significance_level"]:
+            return True
+        else:
+            return False
+    else:
+        return (chi, p_value)
