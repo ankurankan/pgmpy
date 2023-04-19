@@ -254,30 +254,32 @@ class TestCITests(unittest.TestCase):
 class TestResidual(unittest.TestCase):
     def setUp(self):
         np.random.seed(seed=42)
-        z = np.random.normal(2, 2, 1000)
-        x = z + np.random.normal(0, 0.1, 1000)
-        y = z + np.random.normal(0, 0.1, 1000)
+        z = np.absolute(np.random.normal(0, 0.9, 1000))
+        x = 0.7 * z + np.random.normal(0, 0.1, 1000)
+        y = 0.8 * z + np.random.normal(0, 0.1, 1000)
 
         # Create dataset with all variables being the same type
         self.df_cont = pd.DataFrame({"X": x, "Y": y, "Z": z})
 
-        cat_ord = CategoricalDtype(categories=range(int(max(z))), ordered=True)
+        cat_ord = CategoricalDtype(categories=range(3), ordered=True)
         self.df_ord = self.df_cont.round().astype(cat_ord).dropna()
 
         cat_cat = CategoricalDtype(categories=range(3), ordered=False)
-        self.df_cat = (self.df_cont / 3).round().astype(cat_cat).dropna()
+        self.df_cat = (self.df_cont / 3).round().astype(int).astype(cat_cat).dropna()
 
         # Create datasets with mixed data types
 
     def test_residual_single_data_type(self):
-        chi, p_value = residual_test("X", "Y", ["Z"], data=self.df_cont, boolean=False)
-        np_test.assert_almost_equal(chi, 2.009, decimal=3)
-        np_test.assert_almost_equal(p_value, 0.156, decimal=3)
+        chi1, p_value1 = residual_test(
+            "X", "Y", ["Z"], data=self.df_cont, boolean=False
+        )
+        np_test.assert_almost_equal(chi1, 0.164, decimal=3)
+        np_test.assert_almost_equal(p_value1, 0.685, decimal=3)
 
-        chi, p_value = residual_test("X", "Y", ["Z"], data=self.df_ord, boolean=False)
-        np_test.assert_almost_equal(chi, 21.002, decimal=3)
-        np_test.assert_almost_equal(p_value, 0, decimal=3)
+        chi2, p_value2 = residual_test("X", "Y", ["Z"], data=self.df_ord, boolean=False)
+        np_test.assert_almost_equal(chi2, 114.668, decimal=3)
+        np_test.assert_almost_equal(p_value2, 0, decimal=3)
 
-        chi, p_value = residual_test("X", "Y", ["Z"], data=self.df_cat, boolean=False)
-        np_test.assert_almost_equal(chi, 7683.278, decimal=3)
-        np_test.assert_almost_equal(p_value, 0, decimal=3)
+        chi3, p_value3 = residual_test("X", "Y", ["Z"], data=self.df_cat, boolean=False)
+        np_test.assert_almost_equal(chi3, 7683.278, decimal=3)
+        np_test.assert_almost_equal(p_value3, 0, decimal=3)
