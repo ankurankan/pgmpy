@@ -262,6 +262,13 @@ class TestResidual(unittest.TestCase):
         cat_ord = CategoricalDtype(categories=range(3), ordered=True)
         cat_cat = CategoricalDtype(categories=range(3), ordered=False)
 
+        cat_ord_str = CategoricalDtype(
+            categories=[str(i) for i in range(3)], ordered=True
+        )
+        cat_cat_str = CategoricalDtype(
+            categories=[str(i) for i in range(3)], ordered=False
+        )
+
         # Create dataset with all variables being the same type
         self.df_cont = pd.DataFrame({"X": x, "Y": y, "Z": z})
         self.df_ord = self.df_cont.round().astype(int).astype(cat_ord).dropna()
@@ -270,7 +277,7 @@ class TestResidual(unittest.TestCase):
         # Create dataset with mixed data types
         self.df_cont_cont_ord = self.df_cont.copy()
         self.df_cont_cont_ord.Z = (
-            self.df_cont_cont_ord.Z.round().astype(int).astype(cat_ord)
+            self.df_cont_cont_ord.Z.round().astype(int).astype(str).astype(cat_ord_str)
         )
         self.df_cont_cont_ord.dropna(inplace=True)
 
@@ -337,7 +344,7 @@ class TestResidual(unittest.TestCase):
 
         # X, Y, Z = categorical
         chi3, p_value3 = residual_test("X", "Y", ["Z"], data=self.df_cat, boolean=False)
-        np_test.assert_almost_equal(chi3, 12990.669, decimal=3)
+        np_test.assert_almost_equal(chi3, 22.008, decimal=3)
         np_test.assert_almost_equal(p_value3, 0, decimal=3)
 
         # X, Y = continuous, z = ordinal

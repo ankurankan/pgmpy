@@ -692,6 +692,16 @@ def residual_test(X, Y, Z, data, boolean=True, **kwargs):
     else:
         Z = list(Z)
 
+    if Z == []:
+        return chi_square(
+            X=X,
+            Y=Y,
+            Z=Z,
+            data=data,
+            boolean=True,
+            significance_level=kwargs["significance_level"],
+        )
+
     if not isinstance(data, pd.DataFrame):
         raise ValueError(
             f"Variable data. Expected type: pandas.DataFrame. Got type: {type(data)}"
@@ -802,7 +812,7 @@ def residual_test(X, Y, Z, data, boolean=True, **kwargs):
             if pred.shape[1] == 1:
                 residual_x[:, i] = 0
             else:
-                residual_x[:, i] = X.iloc[:, i].values - residual_x[:, 1]
+                residual_x[:, i] = X.iloc[:, i].values - pred[:, 1]
         residual_x = residual_x[:, ~np.all(residual_x == 0, axis=0)]
 
     if Y_type == "cat":
@@ -816,16 +826,14 @@ def residual_test(X, Y, Z, data, boolean=True, **kwargs):
             if pred.shape[1] == 1:
                 residual_y[:, i] = 0
             else:
-                residual_y[:, i] = Y.iloc[:, i].values - residual_y[:, 1]
+                residual_y[:, i] = Y.iloc[:, i].values - pred[:, 1]
         residual_y = residual_y[:, ~np.all(residual_y == 0, axis=0)]
 
     # Step 5: Compute the test statistic
     # Step 5.1: If both X and Y were continuous and ordinal
     if (residual_x.shape[1] == 1) and (residual_y.shape[1] == 1):
-        chi = (
-            (1 / X.shape[0])
-            * (np.dot(residual_x.ravel(), residual_y.ravel()) ** 2)
-            / (np.var((residual_x * residual_y).ravel()))
+        chi = (np.dot(residual_x.ravel(), residual_y.ravel()) ** 2) / (
+            X.shape[0] * np.var((residual_x * residual_y).ravel())
         )
         p_value = chi2.sf(chi, 1)
 
