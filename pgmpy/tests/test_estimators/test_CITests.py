@@ -258,28 +258,114 @@ class TestResidual(unittest.TestCase):
         x = 0.7 * z + np.random.normal(0, 0.1, 1000)
         y = 0.8 * z + np.random.normal(0, 0.1, 1000)
 
+        # Create ordinal and categorical datatypes
+        cat_ord = CategoricalDtype(categories=range(3), ordered=True)
+        cat_cat = CategoricalDtype(categories=range(3), ordered=False)
+
         # Create dataset with all variables being the same type
         self.df_cont = pd.DataFrame({"X": x, "Y": y, "Z": z})
-
-        cat_ord = CategoricalDtype(categories=range(3), ordered=True)
-        self.df_ord = self.df_cont.round().astype(cat_ord).dropna()
-
-        cat_cat = CategoricalDtype(categories=range(3), ordered=False)
+        self.df_ord = self.df_cont.round().astype(int).astype(cat_ord).dropna()
         self.df_cat = (self.df_cont / 3).round().astype(int).astype(cat_cat).dropna()
 
-        # Create datasets with mixed data types
+        # Create dataset with mixed data types
+        self.df_cont_cont_ord = self.df_cont.copy()
+        self.df_cont_cont_ord.Z = (
+            self.df_cont_cont_ord.Z.round().astype(int).astype(cat_ord)
+        )
+        self.df_cont_cont_ord.dropna(inplace=True)
+
+        self.df_cont_cont_cat = self.df_cont.copy()
+        self.df_cont_cont_cat.Z = (
+            self.df_cont_cont_cat.Z.round().astype(int).astype(cat_cat)
+        )
+        self.df_cont_cont_cat.dropna(inplace=True)
+
+        self.df_ord_ord_cont = self.df_cont.copy()
+        self.df_ord_ord_cont.X = (
+            self.df_ord_ord_cont.X.round().astype(int).astype(cat_ord)
+        )
+        self.df_ord_ord_cont.Y = (
+            self.df_ord_ord_cont.Y.round().astype(int).astype(cat_ord)
+        )
+        self.df_ord_ord_cont.dropna(inplace=True)
+
+        self.df_ord_ord_cat = self.df_cont.copy()
+        self.df_ord_ord_cat.X = (
+            self.df_ord_ord_cat.X.round().astype(int).astype(cat_ord)
+        )
+        self.df_ord_ord_cat.Y = (
+            self.df_ord_ord_cat.Y.round().astype(int).astype(cat_ord)
+        )
+        self.df_ord_ord_cat.Z = (
+            self.df_ord_ord_cat.Z.round().astype(int).astype(cat_cat)
+        )
+        self.df_ord_ord_cat.dropna(inplace=True)
+
+        self.df_cat_cat_cont = self.df_cont.copy()
+        self.df_cat_cat_cont.X = (
+            self.df_cat_cat_cont.X.round().astype(int).astype(cat_cat)
+        )
+        self.df_cat_cat_cont.Y = (
+            self.df_cat_cat_cont.Y.round().astype(int).astype(cat_cat)
+        )
+        self.df_cat_cat_cont.dropna(inplace=True)
+
+        self.df_cat_cat_ord = self.df_cont.copy()
+        self.df_cat_cat_ord.X = (
+            self.df_cat_cat_ord.X.round().astype(int).astype(cat_cat)
+        )
+        self.df_cat_cat_ord.Y = (
+            self.df_cat_cat_ord.Y.round().astype(int).astype(cat_cat)
+        )
+        self.df_cat_cat_ord.Z = (
+            self.df_cat_cat_ord.Z.round().astype(int).astype(cat_ord)
+        )
+        self.df_cat_cat_ord.dropna(inplace=True)
 
     def test_residual_single_data_type(self):
+        # X, Y, Z = continuous
         chi1, p_value1 = residual_test(
             "X", "Y", ["Z"], data=self.df_cont, boolean=False
         )
         np_test.assert_almost_equal(chi1, 0.164, decimal=3)
         np_test.assert_almost_equal(p_value1, 0.685, decimal=3)
 
+        # X, Y, Z = ordinal
         chi2, p_value2 = residual_test("X", "Y", ["Z"], data=self.df_ord, boolean=False)
         np_test.assert_almost_equal(chi2, 114.668, decimal=3)
         np_test.assert_almost_equal(p_value2, 0, decimal=3)
 
+        # X, Y, Z = categorical
         chi3, p_value3 = residual_test("X", "Y", ["Z"], data=self.df_cat, boolean=False)
-        np_test.assert_almost_equal(chi3, 7683.278, decimal=3)
+        np_test.assert_almost_equal(chi3, 12990.669, decimal=3)
         np_test.assert_almost_equal(p_value3, 0, decimal=3)
+
+        # X, Y = continuous, z = ordinal
+        chi4, p_value4 = residual_test(
+            "X", "Y", ["Z"], data=self.df_cont_cont_ord, boolean=False
+        )
+
+        # X, Y = continuous, z = categorical
+        chi5, p_value5 = residual_test(
+            "X", "Y", ["Z"], data=self.df_cont_cont_cat, boolean=False
+        )
+
+        # X, Y = ordinal, z = continuous
+        chi5, p_value5 = residual_test(
+            "X", "Y", ["Z"], data=self.df_ord_ord_cont, boolean=False
+        )
+
+        # X, Y = ordinal, z = categorical
+        chi6, p_value6 = residual_test(
+            "X", "Y", ["Z"], data=self.df_ord_ord_cat, boolean=False
+        )
+
+        # X, Y = ordinal, z = categorical
+        chi7, p_value7 = residual_test(
+            "X", "Y", ["Z"], data=self.df_cat_cat_cont, boolean=False
+        )
+
+        # X, Y = categorical, z = ordinal
+        chi8, p_value8 = residual_test(
+            "X", "Y", ["Z"], data=self.df_cat_cat_ord, boolean=False
+        )
