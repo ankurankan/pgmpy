@@ -1,7 +1,8 @@
 #!/usr/bin/env python
+from math import lgamma, log
+
 import numpy as np
 from scipy.special import gammaln
-from math import lgamma, log
 
 from pgmpy.estimators import BaseEstimator
 
@@ -331,7 +332,7 @@ class BicScore(StructureScore):
 
         var_states = self.state_names[variable]
         var_cardinality = len(var_states)
-        state_counts = self.state_counts(variable, parents)
+        state_counts = self.state_counts(variable, parents, reindex=False)
         sample_size = len(self.data)
         num_parents_states = float(state_counts.shape[1])
 
