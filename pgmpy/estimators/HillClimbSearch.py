@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 from collections import deque
-from itertools import permutations
+from itertools import chain, permutations
 
 import networkx as nx
+import numpy as np
+from joblib import Parallel, delayed
 from tqdm.auto import trange
 
 from pgmpy import config
@@ -58,8 +60,9 @@ class HillClimbSearch(StructureEstimator):
 
         super(HillClimbSearch, self).__init__(data, **kwargs)
 
-    def _legal_operations(
-        self,
+    @staticmethod
+    def _compute_score_delta(
+        operation,
         model,
         score,
         structure_score,
@@ -69,29 +72,14 @@ class HillClimbSearch(StructureEstimator):
         white_list,
         fixed_edges,
     ):
-        """Generates a list of legal (= not in tabu_list) graph modifications
-        for a given model, together with their score changes. Possible graph modifications:
-        (1) add, (2) remove, or (3) flip a single edge. For details on scoring
-        see Koller & Friedman, Probabilistic Graphical Models, Section 18.4.3.3 (page 818).
-        If a number `max_indegree` is provided, only modifications that keep the number
-        of parents for each node below `max_indegree` are considered. A list of
-        edges can optionally be passed as `black_list` or `white_list` to exclude those
-        edges or to limit the search.
         """
-
+        Computes the score delta for a given operation.
+        """
+        X, Y = operation[1]
         tabu_list = set(tabu_list)
 
-        # Step 1: Get all legal operations for adding edges.
-        potential_new_edges = (
-            set(permutations(self.variables, 2))
-            - set(model.edges())
-            - set([(Y, X) for (X, Y) in model.edges()])
-        )
-
-        for X, Y in potential_new_edges:
-            # Check if adding (X, Y) will create a cycle.
+        if operation[0] == "+":
             if not nx.has_path(model, Y, X):
-                operation = ("+", (X, Y))
                 if (
                     (operation not in tabu_list)
                     and ((X, Y) not in black_list)
@@ -102,26 +90,21 @@ class HillClimbSearch(StructureEstimator):
                     if len(new_parents) <= max_indegree:
                         score_delta = score(Y, new_parents) - score(Y, old_parents)
                         score_delta += structure_score("+")
-                        yield (operation, score_delta)
+                        return score_delta
 
-        # Step 2: Get all legal operations for removing edges
-        for X, Y in model.edges():
-            operation = ("-", (X, Y))
+        elif operation[0] == "-":
             if (operation not in tabu_list) and ((X, Y) not in fixed_edges):
                 old_parents = model.get_parents(Y)
                 new_parents = old_parents[:]
                 new_parents.remove(X)
                 score_delta = score(Y, new_parents) - score(Y, old_parents)
                 score_delta += structure_score("-")
-                yield (operation, score_delta)
+                return score_delta
 
-        # Step 3: Get all legal operations for flipping edges
-        for X, Y in model.edges():
-            # Check if flipping creates any cycles
+        elif operation[0] == "flip":
             if not any(
                 map(lambda path: len(path) > 2, nx.all_simple_paths(model, X, Y))
             ):
-                operation = ("flip", (X, Y))
                 if (
                     ((operation not in tabu_list) and ("flip", (Y, X)) not in tabu_list)
                     and ((X, Y) not in fixed_edges)
@@ -141,7 +124,8 @@ class HillClimbSearch(StructureEstimator):
                             - score(Y, old_Y_parents)
                         )
                         score_delta += structure_score("flip")
-                        yield (operation, score_delta)
+                        return score_delta
+        return -np.inf
 
     def estimate(
         self,
@@ -154,6 +138,7 @@ class HillClimbSearch(StructureEstimator):
         white_list=None,
         epsilon=1e-4,
         max_iter=1e6,
+        n_jobs=-1,
         show_progress=True,
     ):
         """
@@ -196,6 +181,9 @@ class HillClimbSearch(StructureEstimator):
             If a list of edges is provided as `white_list`, the search is limited to those
             edges. The resulting model will then only contain edges that are in `white_list`.
             Default: None
+
+        n_jobs: int (default: -1)
+            The number of CPU processes to use. -1 uses all available cores.
 
         epsilon: float (default: 1e-4)
             Defines the exit condition. If the improvement in score is less than `epsilon`,
@@ -304,35 +292,49 @@ class HillClimbSearch(StructureEstimator):
         # Step 2: For each iteration, find the best scoring operation and
         #         do that to the current model. If no legal operation is
         #         possible, sets best_operation=None.
-        for _ in iteration:
-            best_operation, best_score_delta = max(
-                self._legal_operations(
-                    current_model,
-                    score_fn,
-                    score.structure_prior_ratio,
-                    tabu_list,
-                    max_indegree,
-                    black_list,
-                    white_list,
-                    fixed_edges,
-                ),
-                key=lambda t: t[1],
-                default=(None, None),
-            )
+        with Parallel(n_jobs=1, pre_dispatch="all") as parallel:
+            for _ in iteration:
+                potential_new_edges = (
+                    set(permutations(self.variables, 2))
+                    - set(current_model.edges())
+                    - set([(Y, X) for (X, Y) in current_model.edges()])
+                )
+                operations = (
+                    [("+", (X, Y)) for (X, Y) in potential_new_edges]
+                    + [("-", (X, Y)) for (X, Y) in current_model.edges()]
+                    + [("flip", (X, Y)) for (X, Y) in current_model.edges()]
+                )
+                score_delta = parallel(
+                    delayed(HillClimbSearch._compute_score_delta)(
+                        op,
+                        current_model,
+                        score_fn,
+                        score.structure_prior_ratio,
+                        tabu_list,
+                        max_indegree,
+                        black_list,
+                        white_list,
+                        fixed_edges,
+                    )
+                    for op in operations
+                )
+                max_index = np.argmax(score_delta)
+                best_score_delta = score_delta[max_index]
+                best_operation = operations[max_index]
 
-            if best_operation is None or best_score_delta < epsilon:
-                break
-            elif best_operation[0] == "+":
-                current_model.add_edge(*best_operation[1])
-                tabu_list.append(("-", best_operation[1]))
-            elif best_operation[0] == "-":
-                current_model.remove_edge(*best_operation[1])
-                tabu_list.append(("+", best_operation[1]))
-            elif best_operation[0] == "flip":
-                X, Y = best_operation[1]
-                current_model.remove_edge(X, Y)
-                current_model.add_edge(Y, X)
-                tabu_list.append(best_operation)
+                if best_operation is None or best_score_delta < epsilon:
+                    break
+                elif best_operation[0] == "+":
+                    current_model.add_edge(*best_operation[1])
+                    tabu_list.append(("-", best_operation[1]))
+                elif best_operation[0] == "-":
+                    current_model.remove_edge(*best_operation[1])
+                    tabu_list.append(("+", best_operation[1]))
+                elif best_operation[0] == "flip":
+                    X, Y = best_operation[1]
+                    current_model.remove_edge(X, Y)
+                    current_model.add_edge(Y, X)
+                    tabu_list.append(best_operation)
 
         # Step 3: Return if no more improvements or maximum iterations reached.
         return current_model
