@@ -90,7 +90,7 @@ class HillClimbSearch(StructureEstimator):
                     if len(new_parents) <= max_indegree:
                         score_delta = score(Y, new_parents) - score(Y, old_parents)
                         score_delta += structure_score("+")
-                        return score_delta
+                        return (operation, score_delta)
 
         elif operation[0] == "-":
             if (operation not in tabu_list) and ((X, Y) not in fixed_edges):
@@ -99,7 +99,7 @@ class HillClimbSearch(StructureEstimator):
                 new_parents.remove(X)
                 score_delta = score(Y, new_parents) - score(Y, old_parents)
                 score_delta += structure_score("-")
-                return score_delta
+                return (operation, score_delta)
 
         elif operation[0] == "flip":
             if not any(
@@ -124,8 +124,8 @@ class HillClimbSearch(StructureEstimator):
                             - score(Y, old_Y_parents)
                         )
                         score_delta += structure_score("flip")
-                        return score_delta
-        return -np.inf
+                        return (operation, score_delta)
+        return (operation, -np.inf)
 
     def estimate(
         self,
@@ -292,7 +292,7 @@ class HillClimbSearch(StructureEstimator):
         # Step 2: For each iteration, find the best scoring operation and
         #         do that to the current model. If no legal operation is
         #         possible, sets best_operation=None.
-        with Parallel(n_jobs=1, pre_dispatch="all") as parallel:
+        with Parallel(n_jobs=n_jobs, require="sharedmem") as parallel:
             for _ in iteration:
                 potential_new_edges = (
                     set(permutations(self.variables, 2))
@@ -304,23 +304,27 @@ class HillClimbSearch(StructureEstimator):
                     + [("-", (X, Y)) for (X, Y) in current_model.edges()]
                     + [("flip", (X, Y)) for (X, Y) in current_model.edges()]
                 )
-                score_delta = parallel(
-                    delayed(HillClimbSearch._compute_score_delta)(
-                        op,
-                        current_model,
-                        score_fn,
-                        score.structure_prior_ratio,
-                        tabu_list,
-                        max_indegree,
-                        black_list,
-                        white_list,
-                        fixed_edges,
-                    )
-                    for op in operations
+                best_operation, best_score_delta = max(
+                    parallel(
+                        delayed(HillClimbSearch._compute_score_delta)(
+                            op,
+                            current_model,
+                            score_fn,
+                            score.structure_prior_ratio,
+                            tabu_list,
+                            max_indegree,
+                            black_list,
+                            white_list,
+                            fixed_edges,
+                        )
+                        for op in operations
+                    ),
+                    key=lambda t: t[1],
+                    default=(None, None),
                 )
-                max_index = np.argmax(score_delta)
-                best_score_delta = score_delta[max_index]
-                best_operation = operations[max_index]
+                # max_index = np.argmax(score_delta)
+                # best_score_delta = score_delta[max_index]
+                # best_operation = operations[max_index]
 
                 if best_operation is None or best_score_delta < epsilon:
                     break
