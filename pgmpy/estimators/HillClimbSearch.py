@@ -60,11 +60,10 @@ class HillClimbSearch(StructureEstimator):
 
         super(HillClimbSearch, self).__init__(data, **kwargs)
 
-    @staticmethod
     def _compute_score_delta(
+        self,
         operation,
         model,
-        score,
         structure_score,
         tabu_list,
         max_indegree,
@@ -88,18 +87,22 @@ class HillClimbSearch(StructureEstimator):
                     old_parents = model.get_parents(Y)
                     new_parents = old_parents + [X]
                     if len(new_parents) <= max_indegree:
-                        score_delta = score(Y, new_parents) - score(Y, old_parents)
+                        score_delta = self.score_fn(Y, new_parents) - self.score_fn(
+                            Y, old_parents
+                        )
                         score_delta += structure_score("+")
-                        return (operation, score_delta)
+                        return score_delta
 
         elif operation[0] == "-":
             if (operation not in tabu_list) and ((X, Y) not in fixed_edges):
                 old_parents = model.get_parents(Y)
                 new_parents = old_parents[:]
                 new_parents.remove(X)
-                score_delta = score(Y, new_parents) - score(Y, old_parents)
+                score_delta = self.score_fn(Y, new_parents) - self.score_fn(
+                    Y, old_parents
+                )
                 score_delta += structure_score("-")
-                return (operation, score_delta)
+                return score_delta
 
         elif operation[0] == "flip":
             if not any(
@@ -118,14 +121,14 @@ class HillClimbSearch(StructureEstimator):
                     new_Y_parents.remove(X)
                     if len(new_X_parents) <= max_indegree:
                         score_delta = (
-                            score(X, new_X_parents)
-                            + score(Y, new_Y_parents)
-                            - score(X, old_X_parents)
-                            - score(Y, old_Y_parents)
+                            self.score_fn(X, new_X_parents)
+                            + self.score_fn(Y, new_Y_parents)
+                            - self.score_fn(X, old_X_parents)
+                            - self.score_fn(Y, old_Y_parents)
                         )
                         score_delta += structure_score("flip")
-                        return (operation, score_delta)
-        return (operation, -np.inf)
+                        return score_delta
+        return -np.inf
 
     def estimate(
         self,
@@ -243,9 +246,9 @@ class HillClimbSearch(StructureEstimator):
             score = scoring_method
 
         if self.use_cache:
-            score_fn = ScoreCache.ScoreCache(score, self.data).local_score
+            self.score_fn = ScoreCache.ScoreCache(score, self.data).local_score
         else:
-            score_fn = score.local_score
+            self.score_fn = score.local_score
 
         # Step 1.2: Check the start_dag
         if start_dag is None:
@@ -304,27 +307,40 @@ class HillClimbSearch(StructureEstimator):
                     + [("-", (X, Y)) for (X, Y) in current_model.edges()]
                     + [("flip", (X, Y)) for (X, Y) in current_model.edges()]
                 )
-                best_operation, best_score_delta = max(
-                    parallel(
-                        delayed(HillClimbSearch._compute_score_delta)(
-                            op,
-                            current_model,
-                            score_fn,
-                            score.structure_prior_ratio,
-                            tabu_list,
-                            max_indegree,
-                            black_list,
-                            white_list,
-                            fixed_edges,
-                        )
-                        for op in operations
-                    ),
-                    key=lambda t: t[1],
-                    default=(None, None),
+                # best_operation, best_score_delta = max(
+                #     parallel(
+                #         delayed(self._compute_score_delta)(
+                #             op,
+                #             current_model,
+                #             score.structure_prior_ratio,
+                #             tabu_list,
+                #             max_indegree,
+                #             black_list,
+                #             white_list,
+                #             fixed_edges,
+                #         )
+                #         for op in operations
+                #     ),
+                #     key=lambda t: t[1],
+                #     default=(None, None),
+                # )
+                score_delta = parallel(
+                    delayed(self._compute_score_delta)(
+                        op,
+                        current_model,
+                        score.structure_prior_ratio,
+                        tabu_list,
+                        max_indegree,
+                        black_list,
+                        white_list,
+                        fixed_edges,
+                    )
+                    for op in operations
                 )
-                # max_index = np.argmax(score_delta)
-                # best_score_delta = score_delta[max_index]
-                # best_operation = operations[max_index]
+
+                max_index = np.argmax(score_delta)
+                best_score_delta = score_delta[max_index]
+                best_operation = operations[max_index]
 
                 if best_operation is None or best_score_delta < epsilon:
                     break
