@@ -2,6 +2,7 @@ from itertools import combinations
 
 import networkx as nx
 import numpy as np
+from joblib import Parallel, delayed
 
 from pgmpy import config
 from pgmpy.base import DAG
@@ -80,7 +81,7 @@ class GES(StructureEstimator):
             current_model.add_edge(u, v)
         return potential_flips
 
-    def estimate(self, scoring_method="bic", debug=False):
+    def estimate(self, scoring_method="bic", variant="orig", n_jobs=-1, debug=False):
         """
         Estimates the DAG from the data.
 
@@ -88,8 +89,20 @@ class GES(StructureEstimator):
         ----------
         scoring_method: str or StructureScore instance
             The score to be optimized during structure estimation.  Supported
-            structure scores: k2, bdeu, bds, bic, aic, bic-g, aic-g. Also accepts a
-            custom score, but it should be an instance of `StructureScore`.
+            structure scores: k2, bdeu, bds, bic, aic, bic-g, aic-g. Also
+            accepts a custom score, but it should be an instance of
+            `StructureScore`.
+
+        variant: str (orig or parallel)
+            Whether to use the original algorithm or parallel version. Parallel
+            version might be slower for smaller networks.
+
+        n_jobs: int (default: -1)
+            When variant = parallel, number of CPU cores to use. -1 uses all
+            available cores.
+
+        debug: bool
+            If True, shows information on edges being added, removed, or flipped.
 
         Returns
         -------
@@ -143,6 +156,13 @@ class GES(StructureEstimator):
                 "scoring_method should either be one of k2score, bdeuscore, bicscore, bdsscore, aicscore, or an instance of StructureScore"
             )
 
+        if not ((variant == "orig") or (variant == "parallel")):
+            raise ValueError(
+                f"variant needs to be either orig or parallel. Got: {variant}"
+            )
+        if variant == "orig":
+            n_jobs = 1
+
         if isinstance(scoring_method, str):
             score = supported_methods[scoring_method.lower()](data=self.data)
         else:
@@ -158,16 +178,31 @@ class GES(StructureEstimator):
         current_model.add_nodes_from(list(self.data.columns))
 
         # Step 2: Forward step: Iteratively add edges till score stops improving.
+        def _edge_addition_delta(current_parents, u, v):
+            return score_fn(v, current_parents + [u]) - score_fn(v, current_parents)
+
+        def _edge_deletion_delta(current_parents, u, v):
+            return score_fn(
+                v, [node for node in current_parents if node != u]
+            ) - score_fn(v, current_parents)
+
+        def _edge_flip_delta(u_parents, v_parents, u, v):
+            return (score_fn(v, v_parents + [u]) - score_fn(v, v_parents)) + (
+                score_fn(u, [node for node in u_parents if node != v])
+                - score_fn(u, u_parents)
+            )
+
         while True:
             potential_edges = self._legal_edge_additions(current_model)
-            score_deltas = np.zeros(len(potential_edges))
-            for index, (u, v) in enumerate(potential_edges):
-                current_parents = current_model.get_parents(v)
-                score_delta = score_fn(v, current_parents + [u]) - score_fn(
-                    v, current_parents
+            current_parents = {
+                node: current_model.get_parents(node) for node in current_model.nodes
+            }
+            score_deltas = np.array(
+                Parallel(n_jobs=n_jobs)(
+                    delayed(_edge_addition_delta)(current_parents[v], u, v)
+                    for (u, v) in potential_edges
                 )
-                score_deltas[index] = score_delta
-
+            )
             if (len(potential_edges) == 0) or (np.all(score_deltas <= 0)):
                 break
 
@@ -181,13 +216,16 @@ class GES(StructureEstimator):
         # Step 3: Backward Step: Iteratively remove edges till score stops improving.
         while True:
             potential_removals = list(current_model.edges())
-            score_deltas = np.zeros(len(potential_removals))
+            current_parents = {
+                node: current_model.get_parents(node) for node in current_model.nodes
+            }
+            score_deltas = np.array(
+                Parallel(n_jobs=n_jobs, require="sharedmem")(
+                    delayed(_edge_deletion_delta)(current_parents[v], u, v)
+                    for (u, v) in potential_removals
+                )
+            )
 
-            for index, (u, v) in enumerate(potential_removals):
-                current_parents = current_model.get_parents(v)
-                score_deltas[index] = score_fn(
-                    v, [node for node in current_parents if node != u]
-                ) - score_fn(v, current_parents)
             if (len(potential_removals) == 0) or (np.all(score_deltas <= 0)):
                 break
             edge_to_remove = potential_removals[np.argmax(score_deltas)]
@@ -200,16 +238,17 @@ class GES(StructureEstimator):
         # Step 4: Flip Edges: Iteratively try to flip edges till score stops improving.
         while True:
             potential_flips = self._legal_edge_flips(current_model)
-            score_deltas = np.zeros(len(potential_flips))
-            for index, (u, v) in enumerate(potential_flips):
-                v_parents = current_model.get_parents(v)
-                u_parents = current_model.get_parents(u)
-                score_deltas[index] = (
-                    score_fn(v, v_parents + [u]) - score_fn(v, v_parents)
-                ) + (
-                    score_fn(u, [node for node in u_parents if node != v])
-                    - score_fn(u, u_parents)
+            current_parents = {
+                node: current_model.get_parents(node) for node in current_model.nodes
+            }
+            score_deltas = np.array(
+                Parallel(n_jobs=n_jobs, require="sharedmem")(
+                    delayed(_edge_flip_delta)(
+                        current_parents[u], current_parents[v], u, v
+                    )
+                    for (u, v) in potential_flips
                 )
+            )
 
             if (len(potential_flips) == 0) or (np.all(score_deltas <= 0)):
                 break
