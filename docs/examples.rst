@@ -1,6 +1,28 @@
 Example Notebooks
 =================
 
+1. Discrete Bayesian Network
+----------------------------
+
+2. Linear Gaussian Bayesian Network
+-----------------------------------
+
+3. Causal Discovery / Structure Learning
+----------------------------------------
+
+4. Probabilistic Inference
+--------------------------
+
+5. Causal Inference
+-------------------
+
+6. Simulations
+--------------
+
+7. Extending pgmpy
+------------------
+
+
 .. toctree::
    :hidden:
    :maxdepth: 0
