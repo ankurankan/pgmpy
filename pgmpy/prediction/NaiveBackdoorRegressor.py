@@ -84,20 +84,12 @@ class NaiveBackdoorRegressor(RegressorMixin, BaseEstimator):
         self.base_estimator = base_estimator
         self.multi_output = multi_output
 
-        if multi_output:
-            raise NotImplementedError(
-                "Multiple outcome support is planned for future releases. "
-                "Currently only single outcome variables are supported."
-            )
-
-    def _more_tags(self):
-        """Tags for sklearn compatibility."""
-        # This method is used by sklearn's check_estimator to understand the
-        # capabilities of the estimator.
-        return {
-            "requires_y": True,
-            "allow_nan": False,
-        }
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.target_tags.required = True
+        tags.input_tags.allow_nan = False
+        tags.regressor_tags.poor_score = True
+        return tags
 
     def _validate_dag_and_extract_roles(self):
         """Validate causal graph has required roles and extract variable assignments."""
