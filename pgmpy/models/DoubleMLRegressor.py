@@ -94,49 +94,19 @@ class DoubleMLRegressor(RegressorMixin, BaseEstimator):
 
     def _read_roles(self) -> Tuple[str, List[str]]:
         """Read roles from DAG without mutating the original user-supplied DAG."""
-        # Work on a deep copy so we never change the user's DAG object.
+        if not isinstance(self.dag, DAG):
+            raise ValueError("causal_graph must be an instance of pgmpy's DAG class.")
         dag_copy = copy.deepcopy(self.dag)
+        dag_copy.is_valid_causal_structure()
 
-        if not (
-            hasattr(dag_copy, "get_role")
-            and hasattr(dag_copy, "is_valid_causal_structure")
-        ):
-            if isinstance(DAG, type) and not isinstance(self.dag, DAG):
-                raise ValueError(
-                    "dag must be an instance of pgmpy's DAG or implement get_role/is_valid_causal_structure."
-                )
-            if not hasattr(dag_copy, "get_role") or not hasattr(
-                dag_copy, "is_valid_causal_structure"
-            ):
-                raise ValueError(
-                    "dag must implement get_role(role) and is_valid_causal_structure()."
-                )
-
-        try:
-            dag_copy.is_valid_causal_structure()
-        except Exception as e:
-            raise ValueError(f"DAG validation failed: {e}")
-
-        exposure_list = dag_copy.get_role("exposure") or []
-        if not exposure_list:
-            raise ValueError(
-                "DAG must define an 'exposure' role. Use dag.with_role('exposure', var)."
-            )
-        if len(exposure_list) != 1:
+        exposure = dag_copy.get_role("exposure")
+        if len(exposure) != 1:
             raise NotImplementedError(
                 "This estimator supports exactly one exposure variable."
             )
-        exposure_col = exposure_list[0]
+        exposure_col = exposure[0]
 
-        adj_raw = dag_copy.get_role("adjustment") or []
-        if isinstance(adj_raw, (list, tuple, set)):
-            adj_list = list(adj_raw)
-        elif adj_raw is None:
-            adj_list = []
-        else:
-            adj_list = [adj_raw]
-
-        adj_list = [c for c in adj_list if c is not None and c != exposure_col]
+        adj_list = dag_copy.get_role("adjustment")
         return exposure_col, adj_list
 
     def _prepare_feature_df(
