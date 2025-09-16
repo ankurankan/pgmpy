@@ -2,6 +2,7 @@ from .BayesianNetwork import BayesianNetwork
 from .ClusterGraph import ClusterGraph
 from .DiscreteBayesianNetwork import DiscreteBayesianNetwork
 from .DiscreteMarkovNetwork import DiscreteMarkovNetwork
+from .DoubleMLRegressor import DoubleMLRegressor
 from .DynamicBayesianNetwork import DynamicBayesianNetwork
 from .FactorGraph import FactorGraph
 from .FunctionalBayesianNetwork import FunctionalBayesianNetwork
@@ -16,6 +17,7 @@ __all__ = [
     "DiscreteBayesianNetwork",
     "BayesianNetwork",
     "DiscreteMarkovNetwork",
+    "DoubleMLRegressor",
     "MarkovNetwork",
     "FactorGraph",
     "JunctionTree",
