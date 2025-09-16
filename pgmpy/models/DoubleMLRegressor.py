@@ -79,13 +79,18 @@ class DoubleMLRegressor(RegressorMixin, BaseEstimator):
           feature_0, feature_1, ...ror instructing the user to pass a DataFrame or feature_names.
         """
         if isinstance(X, pd.DataFrame):
-            return X.copy()
-        arr = np.asarray(X)
-        if arr.ndim == 1:
-            arr = arr.reshape(-1, 1)
-        if feature_names is None:
-            feature_names = [f"feature_{i}" for i in range(arr.shape[1])]
-        return pd.DataFrame(arr, columns=feature_names)
+            # Handle sklearn compatibility.
+            if all(X.columns == range(X.shape[1])):
+                X.columns = [f"x{i}" for i in range(X.shape[1])]
+            return X
+
+        else:
+            arr = np.asarray(X)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            if feature_names is None:
+                feature_names = [f"x{i}" for i in range(arr.shape[1])]
+            return pd.DataFrame(arr, columns=feature_names)
 
     def _read_roles(self) -> Tuple[str, List[str]]:
         """Read roles from DAG without mutating the original user-supplied DAG."""
@@ -153,24 +158,6 @@ class DoubleMLRegressor(RegressorMixin, BaseEstimator):
         # Convert to DataFrame
         X_df = self._ensure_dataframe(X, feature_names=feature_names)
 
-        cols = list(X_df.columns)
-        is_generic_feature_style = all(
-            str(c).startswith("feature_") for c in cols
-        ) or all(isinstance(c, (int, np.integer)) for c in cols)
-
-        if is_generic_feature_style:
-            found = X_df.shape[1]
-            required = len(required_features)
-            if found < required:
-                raise ValueError(
-                    f"Input has {found} features, but the causal model "
-                    f"requires {len(required_features)}: {required_features}"
-                )
-            # select the first N columns and rename them to the DAG role names
-            out = X_df.iloc[:, : len(required_features)].copy()
-            out.columns = required_features
-            return out
-
         # Standard named-columns path: ensure required columns exist
         missing = set(required_features) - set(X_df.columns)
         if missing:
@@ -182,36 +169,22 @@ class DoubleMLRegressor(RegressorMixin, BaseEstimator):
         return X_df[required_features].copy()
 
     def fit(self, X, y, sample_weight: Optional[Any] = None):
-        # validate input & set sklearn convention attributes
+        # Step 0: Validate inputs and arguments.
         X_arr, y_arr = validate_data(
             self, X, y, accept_sparse=False, ensure_2d=True, force_all_finite=True
         )
-        self.n_features_in_ = X_arr.shape[1]
-
-        try:
-            n_folds_requested = int(self.n_folds)
-        except Exception:
-            raise ValueError(f"n_folds must be integer-like; got {self.n_folds!r}")
-
-        n_folds = max(2, min(n_folds_requested, X_arr.shape[0]))
-
-        # coerce sample_weight if provided (accept pd.Series)
         if sample_weight is not None:
             sample_weight = np.asarray(sample_weight)
-            if sample_weight.ndim > 1:
-                if sample_weight.shape == (X_arr.shape[0], 1):
-                    sample_weight = sample_weight.ravel()
-                else:
-                    raise ValueError("sample_weight must be 1D of shape (n_samples,)")
-            # Length mismatch: raise ValueError - sklearn tests expect this behaviour
-            if sample_weight.shape[0] != X_arr.shape[0]:
+            if sample_weight.ndim != 1:
+                raise ValueError("sample_weight must be 1D of shape (n_samples,)")
+            elif sample_weight.shape[0] != X_arr.shape[0]:
                 raise ValueError("sample_weight must have shape (n_samples,)")
 
-        # Map inputs to DAG-role-named DataFrame
-        dfX = self._prepare_feature_df(X, feature_names=None)
-        self.feature_columns_ = list(dfX.columns)  # expose for predict
+        # Step 1: Preprocess the input data.
+        self.n_features_in_ = X_arr.shape[1]
+        df = self._prepare_feature_df(X_arr, feature_names=None)
+        self.feature_columns_ = list(df.columns)
 
-        df = dfX.copy()
         df["outcome"] = np.asarray(y_arr).ravel()
 
         exposure_col = self.feature_columns_[0]
