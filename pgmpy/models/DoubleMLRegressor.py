@@ -5,7 +5,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, RegressorMixin, clone
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import KFold
 from sklearn.utils.validation import check_is_fitted, validate_data
 
 from pgmpy.base.DAG import DAG
@@ -156,46 +156,24 @@ class DoubleMLRegressor(RegressorMixin, BaseEstimator):
         self.feature_columns_ = list(df.columns)
 
         df["outcome"] = np.asarray(y_arr).ravel()
-
-        exposure_col = self.feature_columns_[0]
-        adj_cols = self.feature_columns_[1:]
-
-        missing = [c for c in [exposure_col] + adj_cols if c not in df.columns]
-        if missing:
-            raise ValueError(
-                f"Missing columns required by DAG roles: {missing}. When using arrays, "
-                f"pass a DataFrame with correct column names."
-            )
+        exposure_col, adj_cols = self._read_roles()
 
         # prepare nuisance covariates excluding treatment
         if len(adj_cols) == 0:
-            X_for_nuisance = np.empty((df.shape[0], 0))
+            covariates_df = np.ones((df.shape[0], 0))
         else:
-            X_for_nuisance = df[adj_cols].to_numpy(dtype=float)
+            covariates_df = df[adj_cols].to_numpy(dtype=float)
 
-        y_vec = df["outcome"].to_numpy(dtype=float)
-        t_vec = df[exposure_col].to_numpy(dtype=float)
+        target_vec = df["outcome"].to_numpy(dtype=float)
+        exposure_vec = df[exposure_col].to_numpy(dtype=float)
+
         n_samples = df.shape[0]
-        if n_samples < 2:
-            raise ValueError(f"Not enough samples to fit. n_samples = {n_samples}")
-
-        # do not coerce self.n_folds here; compute local bounded folds
-        n_folds = max(2, min(int(self.n_folds), n_samples))
-
-        unique_vals, counts = np.unique(t_vec, return_counts=True)
-        use_stratify = unique_vals.size == 2 and np.min(counts) >= n_folds
-        splitter = (
-            StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=self.seed)
-            if use_stratify
-            else KFold(n_splits=n_folds, shuffle=True, random_state=self.seed)
-        )
+        splitter = KFold(n_splits=self.n_folds, shuffle=True, random_state=self.seed)
 
         g_hat = np.zeros(n_samples, dtype=float)
         m_hat = np.zeros(n_samples, dtype=float)
 
-        for train_idx, test_idx in splitter.split(
-            X_for_nuisance, t_vec if use_stratify else None
-        ):
+        for train_idx, test_idx in splitter.split(covariates_df, exposure_vec):
             ml_g = clone(self.estimator_g)
             ml_m = (
                 clone(self.estimator_m)
@@ -203,76 +181,21 @@ class DoubleMLRegressor(RegressorMixin, BaseEstimator):
                 else clone(self.estimator_g)
             )
 
-            X_train = (
-                X_for_nuisance[train_idx]
-                if X_for_nuisance.size
-                else np.empty((train_idx.shape[0], 0))
-            )
-            X_test = (
-                X_for_nuisance[test_idx]
-                if X_for_nuisance.size
-                else np.empty((test_idx.shape[0], 0))
-            )
-            y_train = y_vec[train_idx]
-            t_train = t_vec[train_idx]
+            ml_g.fit(covariates_df[train_idx], target_vec[train_idx])
+            g_test_pred = np.asarray(ml_g.predict(covariates_df[test_idx])).ravel()
 
-            if X_train.shape[1] == 0:
-                g_test_pred = np.repeat(y_train.mean(), X_test.shape[0])
-                m_test_pred = np.repeat(t_train.mean(), X_test.shape[0])
-            else:
-                ml_g.fit(X_train, y_train)
-                g_test_pred = np.asarray(ml_g.predict(X_test)).ravel()
-
-                ml_m.fit(X_train, t_train)
-                if hasattr(ml_m, "predict_proba"):
-                    try:
-                        probs = ml_m.predict_proba(X_test)
-                        if probs.ndim == 2 and probs.shape[1] >= 2:
-                            m_test_pred = probs[:, 1]
-                        else:
-                            m_test_pred = probs.ravel()
-                    except Exception:
-                        m_test_pred = ml_m.predict(X_test)
-                else:
-                    m_test_pred = ml_m.predict(X_test)
-                m_test_pred = np.asarray(m_test_pred).ravel()
+            ml_m.fit(covariates_df[train_idx], exposure_vec[train_idx])
+            m_test_pred = ml_m.predict(covariates_df[test_idx]).ravel()
 
             g_hat[test_idx] = g_test_pred
             m_hat[test_idx] = m_test_pred
 
-        if np.any(np.isnan(g_hat)) or np.any(np.isnan(m_hat)):
-            raise RuntimeError("NaN in out-of-fold nuisance predictions.")
-
         self.g_hat_ = g_hat
         self.m_hat_ = m_hat
 
-        # final full-sample fits for prediction
-        if X_for_nuisance.shape[1] == 0:
-            self.estimator_g_ = None
-            self.estimator_m_ = None
-            self.y_mean_ = float(y_vec.mean())
-            self.t_mean_ = float(t_vec.mean())
-        else:
-            full_g = clone(self.estimator_g)
-            full_m = (
-                clone(self.estimator_m)
-                if self.estimator_m is not None
-                else clone(self.estimator_g)
-            )
-            if X_for_nuisance.size == 0:
-                X_for_nuisance = np.empty((n_samples, 0))
-            else:
-                X_for_nuisance_full = X_for_nuisance
-            full_g.fit(X_for_nuisance_full, y_vec)
-            full_m.fit(X_for_nuisance_full, t_vec)
-            self.estimator_g_ = full_g
-            self.estimator_m_ = full_m
-            self.y_mean_ = float(y_vec.mean())
-            self.t_mean_ = float(t_vec.mean())
-
         # orthogonal estimate (OLS on residuals)
-        y_res = y_vec - self.g_hat_
-        t_res = t_vec - self.m_hat_
+        y_res = target_vec - self.g_hat_
+        t_res = exposure_vec - self.m_hat_
         X_res = np.column_stack([np.ones(len(t_res)), t_res])
         theta_coef, *_ = np.linalg.lstsq(X_res, y_res, rcond=None)
         intercept = float(theta_coef[0])
@@ -285,7 +208,7 @@ class DoubleMLRegressor(RegressorMixin, BaseEstimator):
         self.intercept_ = intercept
 
         self._design_columns = [exposure_col] + adj_cols
-        self.n_folds_ = n_folds
+        self.n_folds_ = self.n_folds
         self.is_fitted_ = True
         return self
 
