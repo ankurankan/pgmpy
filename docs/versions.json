@@ -1,7 +1,5 @@
 {
-  "stable": null,
+  "stable": "v1.1.0",
   "releases": [],
-  "development": [
-    "dev"
-  ]
+  "development": ["dev"]
 }
