@@ -2,6 +2,8 @@
 Tests for the sklearn-compatible ExpertInLoop class in pgmpy.causal_discovery
 """
 
+import importlib
+
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -445,6 +447,196 @@ def test_empty_graph():
     assert set(estimator.causal_graph_.nodes()) == {"A", "B"}
 
 
+def test_show_progress_uses_tqdm(monkeypatch):
+    expert_module = importlib.import_module("pgmpy.causal_discovery.ExpertInLoop")
+    tqdm_instances = []
+
+    class DummyTqdm:
+        def __init__(self, iterable=None, total=None, desc=None, leave=True, unit=None):
+            self.iterable = iterable
+            self.total = total
+            self.desc = desc
+            self.leave = leave
+            self.unit = unit
+            self.descriptions = [desc] if desc is not None else []
+            self.postfixes = []
+            self.updates = []
+            self.closed = False
+            tqdm_instances.append(self)
+
+        def __iter__(self):
+            return iter(self.iterable)
+
+        def set_description(self, desc):
+            self.desc = desc
+            self.descriptions.append(desc)
+
+        def set_postfix(self, **kwargs):
+            self.postfixes.append(kwargs)
+
+        def update(self, n=1):
+            self.updates.append(n)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(expert_module, "tqdm", DummyTqdm)
+    monkeypatch.setattr(expert_module.config, "SHOW_PROGRESS", True)
+
+    data = pd.DataFrame(
+        {
+            "A": pd.Categorical([0, 1] * 50),
+            "B": pd.Categorical([1, 0] * 50),
+            "C": pd.Categorical([0, 0, 1, 1] * 25),
+        }
+    )
+    estimator = ExpertInLoop(
+        ci_test=StrongCI(data),
+        orientation_fn=simple_orient,
+        effect_size_threshold=0.05,
+        pval_threshold=0.05,
+        show_progress=True,
+    )
+
+    estimator.fit(data)
+
+    assert len(tqdm_instances) >= 2
+    assert any(instance.unit == "iter" for instance in tqdm_instances)
+    assert any(
+        any(desc and "ExpertInLoop iter 1: CI tests" in desc for desc in instance.descriptions)
+        for instance in tqdm_instances
+    )
+    assert any(instance.updates for instance in tqdm_instances if instance.unit == "iter")
+    assert all(instance.closed for instance in tqdm_instances)
+
+
+def _normalize_test_all_results(results):
+    normalized = results.copy()
+    normalized.loc[:, "z"] = normalized.z.map(lambda z: tuple(sorted(z)))
+    return normalized.reset_index(drop=True)
+
+
+@pytest.fixture
+def deterministic_four_node_data():
+    return pd.DataFrame(
+        {
+            "A": [0, 1] * 50,
+            "B": [1, 0] * 50,
+            "C": [0, 0, 1, 1] * 25,
+            "D": [1, 1, 0, 0] * 25,
+        },
+        dtype="category",
+    )
+
+
+def test_test_all_parallel_matches_sequential_with_ci_object(fake_ci_estimator, simple_dag):
+    _, data = fake_ci_estimator
+    sequential_estimator = ExpertInLoop(
+        ci_test=StrongCI(data),
+        orientation_fn=simple_orient,
+        n_jobs=1,
+        show_progress=False,
+    )
+    parallel_estimator = ExpertInLoop(
+        ci_test=StrongCI(data),
+        orientation_fn=simple_orient,
+        n_jobs=2,
+        show_progress=False,
+    )
+
+    sequential_results = sequential_estimator._test_all(
+        ci_test=sequential_estimator.ci_test,
+        dag=simple_dag,
+        data=data,
+    )
+    parallel_results = parallel_estimator._test_all(
+        ci_test=parallel_estimator.ci_test,
+        dag=simple_dag,
+        data=data,
+    )
+
+    pd.testing.assert_frame_equal(
+        _normalize_test_all_results(sequential_results),
+        _normalize_test_all_results(parallel_results),
+    )
+
+
+def test_parallel_fit_matches_sequential_with_default_ci_test(deterministic_four_node_data):
+    sequential_estimator = ExpertInLoop(
+        ci_test=None,
+        orientation_fn=simple_orient,
+        effect_size_threshold=0.05,
+        pval_threshold=0.05,
+        n_jobs=1,
+        show_progress=False,
+    )
+    parallel_estimator = ExpertInLoop(
+        ci_test=None,
+        orientation_fn=simple_orient,
+        effect_size_threshold=0.05,
+        pval_threshold=0.05,
+        n_jobs=2,
+        show_progress=False,
+    )
+
+    sequential_estimator.fit(deterministic_four_node_data)
+    parallel_estimator.fit(deterministic_four_node_data)
+
+    assert set(sequential_estimator.causal_graph_.edges()) == set(parallel_estimator.causal_graph_.edges())
+    pd.testing.assert_frame_equal(sequential_estimator.adjacency_matrix_, parallel_estimator.adjacency_matrix_)
+
+
+def test_forbidden_edges_blacklist_exact_pairs_only(deterministic_four_node_data):
+    estimator = ExpertInLoop(
+        ci_test=StrongCI(deterministic_four_node_data),
+        orientation_fn=simple_orient,
+        expert_knowledge=ExpertKnowledge(forbidden_edges=[("A", "B"), ("C", "D")]),
+        effect_size_threshold=0.05,
+        pval_threshold=0.05,
+        show_progress=False,
+    )
+
+    estimator.fit(deterministic_four_node_data)
+
+    assert set(estimator.causal_graph_.edges()) == {("A", "C"), ("A", "D"), ("B", "C"), ("B", "D")}
+
+
+def test_unresolved_cycle_skips_edge_and_preserves_dag():
+    data = pd.DataFrame(
+        {
+            "A": [0, 1] * 50,
+            "B": [1, 0] * 50,
+            "C": [0, 0, 1, 1] * 25,
+        },
+        dtype="category",
+    )
+    orientation_calls = {}
+
+    def cycle_orient(var1, var2, **kwargs):
+        pair = frozenset((var1, var2))
+        orientation_calls[pair] = orientation_calls.get(pair, 0) + 1
+        mapping = {
+            frozenset(("A", "B")): ("A", "B"),
+            frozenset(("A", "C")): ("C", "A"),
+            frozenset(("B", "C")): ("B", "C"),
+        }
+        return mapping[pair]
+
+    estimator = ExpertInLoop(
+        ci_test=StrongCI(data),
+        orientation_fn=cycle_orient,
+        effect_size_threshold=0.05,
+        pval_threshold=0.05,
+        show_progress=False,
+    )
+
+    estimator.fit(data)
+
+    assert set(estimator.causal_graph_.edges()) == {("A", "B"), ("C", "A")}
+    assert nx.is_directed_acyclic_graph(estimator.causal_graph_)
+    assert orientation_calls[frozenset(("B", "C"))] == 1
+
+
 # --- _break_cycle unit tests ---
 
 
@@ -498,6 +690,22 @@ class MockCI(_BaseCITest):
 
     def run_test(self, X, Y, Z):
         if {X, Y} == {"A", "B"}:
+            self.statistic_ = 0.01
+            self.p_value_ = 0.9
+            return (self.statistic_, self.p_value_)
+        else:
+            self.statistic_ = 0.5
+            self.p_value_ = 0.001
+            return (self.statistic_, self.p_value_)
+
+
+class ClosingWeakCI(_BaseCITest):
+    def __init__(self, data):
+        self.data = data
+        super().__init__()
+
+    def run_test(self, X, Y, Z):
+        if (X, Y) == ("A", "B"):
             self.statistic_ = 0.01
             self.p_value_ = 0.9
             return (self.statistic_, self.p_value_)
@@ -636,3 +844,23 @@ class TestBreakCycle:
         existing_edges = {("A", "B"), ("B", "D"), ("A", "C"), ("C", "D")}
         for edge in result:
             assert edge in existing_edges
+
+    def test_closing_edge_is_considered(self, fake_ci_estimator, simple_dag, monkeypatch):
+        estimator, data = fake_ci_estimator
+
+        def rotated_simple_cycles(graph):
+            return [["B", "C", "A"]]
+
+        monkeypatch.setattr(nx, "simple_cycles", rotated_simple_cycles)
+
+        result = estimator._break_cycle(
+            simple_dag,
+            "C",
+            "A",
+            ci_test=ClosingWeakCI(data),
+            data=data,
+            effect_size_threshold=0.05,
+            pval_threshold=0.05,
+        )
+
+        assert result == [("A", "B")]

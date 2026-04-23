@@ -5,6 +5,8 @@ from itertools import combinations
 
 import networkx as nx
 import pandas as pd
+from joblib import Parallel, delayed, effective_n_jobs
+from tqdm.auto import tqdm
 
 from pgmpy import config
 from pgmpy.base import DAG
@@ -12,6 +14,34 @@ from pgmpy.causal_discovery._base import _BaseCausalDiscovery
 from pgmpy.ci_tests import get_ci_test
 from pgmpy.global_vars import logger
 from pgmpy.utils import llm_pairwise_orient
+
+
+def _compute_ci_row(u, v, parent_sets, ci_test):
+    u_parents = set(parent_sets[u])
+    v_parents = set(parent_sets[v])
+
+    if v in u_parents:
+        u_parents -= {v}
+        edge_present = True
+    elif u in v_parents:
+        v_parents -= {u}
+        edge_present = True
+    else:
+        edge_present = False
+
+    cond_set = list(set(u_parents).union(v_parents))
+    effect, p_value = ci_test.run_test(X=u, Y=v, Z=cond_set)
+
+    return [u, v, cond_set, edge_present, effect, p_value]
+
+
+def _compute_ci_chunk(pairs, parent_sets, ci_test_spec, ci_test, data):
+    if (ci_test_spec is None) or isinstance(ci_test_spec, str):
+        local_ci_test = get_ci_test(test=ci_test_spec, data=data)
+    else:
+        local_ci_test = ci_test
+
+    return [_compute_ci_row(u=u, v=v, parent_sets=parent_sets, ci_test=local_ci_test) for u, v in pairs]
 
 
 class ExpertInLoop(_BaseCausalDiscovery):
@@ -76,6 +106,11 @@ class ExpertInLoop(_BaseCausalDiscovery):
     use_cache : bool, default=True
         If True, the algorithm caches results from `orientation_fn` and reuses
         them in future calls instead of querying the orientation function again.
+
+    n_jobs : int, default=1
+        The number of parallel jobs to use while evaluating conditional
+        independence tests in `_test_all`. Uses joblib parallelism when
+        greater than 1.
 
     show_progress : bool, default=True
         If True, prints information about the running status.
@@ -158,6 +193,7 @@ class ExpertInLoop(_BaseCausalDiscovery):
         orientations: set[tuple[str, str]] | None = None,
         expert_knowledge=None,
         use_cache: bool = True,
+        n_jobs: int = -1,
         show_progress: bool = True,
     ):
         self.pval_threshold = pval_threshold
@@ -167,9 +203,10 @@ class ExpertInLoop(_BaseCausalDiscovery):
         self.orientations = orientations
         self.expert_knowledge = expert_knowledge
         self.use_cache = use_cache
+        self.n_jobs = n_jobs
         self.show_progress = show_progress
 
-    def _test_all(self, ci_test, dag: DAG, data: pd.DataFrame) -> pd.DataFrame:
+    def _test_all(self, ci_test, dag: DAG, data: pd.DataFrame, iteration: int | None = None) -> pd.DataFrame:
         """
         Runs CI tests on all possible combinations of variables in `dag`.
 
@@ -190,25 +227,55 @@ class ExpertInLoop(_BaseCausalDiscovery):
             The results with p-values and effect sizes of all the tests.
         """
         cis = []
-        for u, v in combinations(list(dag.nodes()), 2):
-            u_parents = set(dag.get_parents(u))
-            v_parents = set(dag.get_parents(v))
+        variables = list(dag.nodes())
+        parent_sets = {node: set(dag.get_parents(node)) for node in variables}
+        pair_list = list(combinations(variables, 2))
+        pairs = iter(pair_list)
+        pair_pbar = None
+        use_parallel = (self.n_jobs != 1) and (len(pair_list) > 1)
+        if self.show_progress and config.SHOW_PROGRESS and not use_parallel:
+            pair_desc = "ExpertInLoop: CI tests"
+            if iteration is not None:
+                pair_desc = f"ExpertInLoop iter {iteration}: CI tests"
 
-            if v in u_parents:
-                u_parents -= {v}
-                edge_present = True
-            elif u in v_parents:
-                v_parents -= {u}
-                edge_present = True
-            else:
-                edge_present = False
+            pair_pbar = tqdm(
+                pairs,
+                total=(len(variables) * (len(variables) - 1)) // 2,
+                desc=pair_desc,
+                leave=False,
+            )
+            pairs = pair_pbar
 
-            cond_set = list(set(u_parents).union(v_parents))
-            effect, p_value = ci_test.run_test(X=u, Y=v, Z=cond_set)
+        if use_parallel:
+            n_chunks = min(len(pair_list), max(1, effective_n_jobs(self.n_jobs)))
+            chunk_size = (len(pair_list) + n_chunks - 1) // n_chunks
+            pair_chunks = [pair_list[i : i + chunk_size] for i in range(0, len(pair_list), chunk_size)]
+            chunk_results = Parallel(n_jobs=self.n_jobs, backend="loky")(
+                delayed(_compute_ci_chunk)(
+                    pairs=pair_chunk,
+                    parent_sets=parent_sets,
+                    ci_test_spec=self.ci_test,
+                    ci_test=ci_test,
+                    data=data,
+                )
+                for pair_chunk in pair_chunks
+            )
+            cis = [row for chunk_result in chunk_results for row in chunk_result]
+        else:
+            for u, v in pairs:
+                cis.append(_compute_ci_row(u=u, v=v, parent_sets=parent_sets, ci_test=ci_test))
 
-            cis.append([u, v, cond_set, edge_present, effect, p_value])
+        if pair_pbar is not None:
+            pair_pbar.close()
 
         return pd.DataFrame(cis, columns=["u", "v", "z", "edge_present", "effect", "p_val"])
+
+    @staticmethod
+    def _pair_key(u, v, node_order):
+        if node_order[u] < node_order[v]:
+            return (u, v)
+        else:
+            return (v, u)
 
     def _break_cycle(self, dag, u, v, ci_test, data, effect_size_threshold, pval_threshold):
         """
@@ -241,16 +308,19 @@ class ExpertInLoop(_BaseCausalDiscovery):
         """
         logger.info("Returned edge orientation creates a cycle. Trying to identify the incorrect edge.")
         edges_to_remove = []
+        seen_edges = set()
         temp_dag = dag.copy()
         temp_dag.add_edges_from([(u, v)])
         for cycle in nx.simple_cycles(temp_dag):
-            for x, y in zip(cycle, cycle[1:]):
+            for x, y in zip(cycle, cycle[1:] + cycle[:1]):
                 if not ((x == u) and (y == v)):
                     Z = set(cycle) - {x, y}
                     effect, pvalue = ci_test.run_test(x, y, Z=Z)
                     if (effect < effect_size_threshold) and (pvalue > pval_threshold):
-                        edges_to_remove.append((x, y))
-                        logger.info(f"Removing edge: {x} -> {y} to fix cycle")
+                        if (x, y) not in seen_edges:
+                            edges_to_remove.append((x, y))
+                            seen_edges.add((x, y))
+                            logger.info(f"Removing edge: {x} -> {y} to fix cycle")
 
         return edges_to_remove
 
@@ -269,6 +339,7 @@ class ExpertInLoop(_BaseCausalDiscovery):
             Returns the instance with the fitted attributes.
         """
         self.variables_ = list(X.columns)
+        node_order = {node: idx for idx, node in enumerate(self.variables_)}
 
         # Initialize orientation cache (preserve if pre-populated)
         if not hasattr(self, "orientation_cache_"):
@@ -282,127 +353,185 @@ class ExpertInLoop(_BaseCausalDiscovery):
         ci_test = get_ci_test(test=self.ci_test, data=X)
 
         # Initialize blacklisted_edges with forbidden_edges from expert knowledge
-        blacklisted_edges = []
+        blacklisted_pairs = set()
         if self.expert_knowledge is not None:
-            blacklisted_edges = list(self.expert_knowledge.forbidden_edges)
+            blacklisted_pairs = {
+                self._pair_key(edge[0], edge[1], node_order=node_order)
+                for edge in self.expert_knowledge.forbidden_edges
+            }
             # Add required edges to the DAG
             if self.expert_knowledge.required_edges:
                 dag.add_edges_from(self.expert_knowledge.required_edges)
 
-        while True:
-            # Step 1: Compute effects and p-values between every combination of variables
-            all_effects = self._test_all(dag=dag, ci_test=ci_test, data=X)
+        progress_bar = None
+        iteration = 0
+        if self.show_progress and config.SHOW_PROGRESS:
+            progress_bar = tqdm(desc="ExpertInLoop iterations", unit="iter")
 
-            # Edge case: if only 1 feature, no combinations exist
-            if all_effects.empty:
-                break
+        try:
+            while True:
+                iteration += 1
+                if progress_bar is not None:
+                    progress_bar.set_description(f"ExpertInLoop iter {iteration}: CI tests")
+                    progress_bar.set_postfix(edges=dag.number_of_edges())
 
-            # Step 2: Remove any edges between variables that are not sufficiently associated
-            edge_effects = all_effects[all_effects.edge_present]
-            edge_effects = edge_effects[
-                (edge_effects.effect < self.effect_size_threshold) & (edge_effects.p_val > self.pval_threshold)
-            ]
-            remove_edges = list(edge_effects.loc[:, ("u", "v")].to_records(index=False))
-            for edge in remove_edges:
-                dag.remove_edge(edge[0], edge[1])
+                # Step 1: Compute effects and p-values between every combination of variables
+                all_effects = self._test_all(dag=dag, ci_test=ci_test, data=X, iteration=iteration)
 
-            # Step 3: Add edge between variables which have significant association
-            # Step 3.1: Find edges that are not present in the DAG but have significant association
-            nonedge_effects = all_effects[all_effects.edge_present == False]
-            nonedge_effects = nonedge_effects[
-                (nonedge_effects.effect >= self.effect_size_threshold) & (nonedge_effects.p_val <= self.pval_threshold)
-            ]
+                # Edge case: if only 1 feature, no combinations exist
+                if all_effects.empty:
+                    if progress_bar is not None:
+                        progress_bar.update(1)
+                    break
 
-            # Step 3.2: Remove any pair of variables that are blacklisted
-            if len(blacklisted_edges) > 0:
-                blacklisted_edges_us = [edge[0] for edge in blacklisted_edges]
-                blacklisted_edges_vs = [edge[1] for edge in blacklisted_edges]
-                nonedge_effects = nonedge_effects.loc[
-                    ~(
-                        (nonedge_effects.u.isin(blacklisted_edges_us) & nonedge_effects.v.isin(blacklisted_edges_vs))
-                        | (nonedge_effects.u.isin(blacklisted_edges_vs) & nonedge_effects.v.isin(blacklisted_edges_us))
-                    ),
-                    :,
+                # Step 2: Remove any edges between variables that are not sufficiently associated
+                edge_effects = all_effects[all_effects.edge_present]
+                edge_effects = edge_effects[
+                    (edge_effects.effect < self.effect_size_threshold) & (edge_effects.p_val > self.pval_threshold)
+                ]
+                remove_edges = list(edge_effects.loc[:, ("u", "v")].to_records(index=False))
+                for edge in remove_edges:
+                    dag.remove_edge(edge[0], edge[1])
+
+                # Step 3: Add edge between variables which have significant association
+                # Step 3.1: Find edges that are not present in the DAG but have significant association
+                nonedge_effects = all_effects[all_effects.edge_present == False]
+                nonedge_effects = nonedge_effects[
+                    (nonedge_effects.effect >= self.effect_size_threshold)
+                    & (nonedge_effects.p_val <= self.pval_threshold)
                 ]
 
-            # Step 3.3: Exit loop if all correlations in data are explained by the model
-            if (edge_effects.shape[0] == 0) and (nonedge_effects.shape[0] == 0):
-                break
+                # Step 3.2: Remove any pair of variables that are blacklisted
+                if len(blacklisted_pairs) > 0:
+                    pair_keys = [
+                        self._pair_key(u, v, node_order=node_order)
+                        for u, v in zip(nonedge_effects.u, nonedge_effects.v)
+                    ]
+                    keep_mask = [pair_key not in blacklisted_pairs for pair_key in pair_keys]
+                    nonedge_effects = nonedge_effects.loc[
+                        keep_mask,
+                        :,
+                    ]
 
-            # If there are only removals and no candidate additions, continue
-            # to the next iteration after having applied removals.
-            if nonedge_effects.shape[0] == 0:
-                continue
-
-            # Step 3.4: Find the pair of variables with the highest effect size
-            selected_edge = nonedge_effects.iloc[nonedge_effects.effect.argmax()]
-            edge_direction = None
-
-            # Step 3.5: Find the edge orientation for the selected pair of variables
-            #
-            # Priority order:
-            # 1. If `orientations` are provided, use them
-            # 2. Check temporal ordering from expert_knowledge
-            # 3. Try to use cached orientations if `use_cache=True`
-            # 4. If no cached orientation, call the orientation_fn
-
-            # Get orientations set (handle None case)
-            orientations_set = self.orientations if self.orientations is not None else set()
-
-            if (selected_edge.u, selected_edge.v) in orientations_set:
-                edge_direction = (selected_edge.u, selected_edge.v)
-            elif (selected_edge.v, selected_edge.u) in orientations_set:
-                edge_direction = (selected_edge.v, selected_edge.u)
-            elif self.expert_knowledge is not None and self.expert_knowledge.temporal_ordering:
-                # Check if temporal order can determine the direction
-                u_order = self.expert_knowledge.temporal_ordering.get(selected_edge.u)
-                v_order = self.expert_knowledge.temporal_ordering.get(selected_edge.v)
-                if u_order is not None and v_order is not None:
-                    if u_order < v_order:
-                        edge_direction = (selected_edge.u, selected_edge.v)
-                    elif v_order < u_order:
-                        edge_direction = (selected_edge.v, selected_edge.u)
-            elif self.use_cache and (selected_edge.u, selected_edge.v) in self.orientation_cache_:
-                edge_direction = (selected_edge.u, selected_edge.v)
-            elif self.use_cache and (selected_edge.v, selected_edge.u) in self.orientation_cache_:
-                edge_direction = (selected_edge.v, selected_edge.u)
-            else:
-                edge_direction = self.orientation_fn(selected_edge.u, selected_edge.v)
-                if self.use_cache is True and edge_direction is not None:
-                    self.orientation_cache_.add(edge_direction)
-
-                if config.SHOW_PROGRESS and self.show_progress and edge_direction is not None:
-                    logger.info(
-                        "\rQueried for edge orientation between "
-                        f"{selected_edge.u} and {selected_edge.v}. Got: "
-                        f"{edge_direction[0]} -> {edge_direction[1]}"
+                if progress_bar is not None:
+                    progress_bar.set_postfix(
+                        edges=dag.number_of_edges(),
+                        removals=len(remove_edges),
+                        candidates=nonedge_effects.shape[0],
                     )
 
-            # Step 3.6: Handle the edge direction
-            # 1. If orientation function returns None, do not add the edge
-            # 2. If new edge creates a cycle, try to resolve it
-            # 3. Otherwise, add the edge
-            if edge_direction is None:
-                logger.info(
-                    f"Orientation function returned None for edge {selected_edge.u} - {selected_edge.v}. "
-                    "Skipping this edge."
-                )
-                blacklisted_edges.append((selected_edge.u, selected_edge.v))
-            elif nx.has_path(dag, edge_direction[1], edge_direction[0]):
-                edges_to_remove = self._break_cycle(
-                    dag,
-                    edge_direction[0],
-                    edge_direction[1],
-                    ci_test=ci_test,
-                    data=X,
-                    effect_size_threshold=self.effect_size_threshold,
-                    pval_threshold=self.pval_threshold,
-                )
-                blacklisted_edges.extend(edges_to_remove)
-                dag.remove_edges_from(edges_to_remove)
-                dag.add_edges_from([(edge_direction[0], edge_direction[1])])
-            else:
-                dag.add_edges_from([edge_direction])
+                # Step 3.3: Exit loop if all correlations in data are explained by the model
+                if (edge_effects.shape[0] == 0) and (nonedge_effects.shape[0] == 0):
+                    if progress_bar is not None:
+                        progress_bar.update(1)
+                    break
+
+                # If there are only removals and no candidate additions, continue
+                # to the next iteration after having applied removals.
+                if nonedge_effects.shape[0] == 0:
+                    if progress_bar is not None:
+                        progress_bar.update(1)
+                    continue
+
+                # Step 3.4: Find the pair of variables with the highest effect size
+                selected_edge = nonedge_effects.iloc[nonedge_effects.effect.argmax()]
+                selected_pair_key = self._pair_key(selected_edge.u, selected_edge.v, node_order=node_order)
+                edge_direction = None
+
+                # Step 3.5: Find the edge orientation for the selected pair of variables
+                #
+                # Priority order:
+                # 1. If `orientations` are provided, use them
+                # 2. Check temporal ordering from expert_knowledge
+                # 3. Try to use cached orientations if `use_cache=True`
+                # 4. If no cached orientation, call the orientation_fn
+
+                # Get orientations set (handle None case)
+                orientations_set = self.orientations if self.orientations is not None else set()
+                if progress_bar is not None:
+                    progress_bar.set_description(
+                        f"ExpertInLoop iter {iteration}: orienting {selected_edge.u}-{selected_edge.v}"
+                    )
+
+                if (selected_edge.u, selected_edge.v) in orientations_set:
+                    edge_direction = (selected_edge.u, selected_edge.v)
+                elif (selected_edge.v, selected_edge.u) in orientations_set:
+                    edge_direction = (selected_edge.v, selected_edge.u)
+                elif self.expert_knowledge is not None and self.expert_knowledge.temporal_ordering:
+                    # Check if temporal order can determine the direction
+                    u_order = self.expert_knowledge.temporal_ordering.get(selected_edge.u)
+                    v_order = self.expert_knowledge.temporal_ordering.get(selected_edge.v)
+                    if u_order is not None and v_order is not None:
+                        if u_order < v_order:
+                            edge_direction = (selected_edge.u, selected_edge.v)
+                        elif v_order < u_order:
+                            edge_direction = (selected_edge.v, selected_edge.u)
+                elif self.use_cache and (selected_edge.u, selected_edge.v) in self.orientation_cache_:
+                    edge_direction = (selected_edge.u, selected_edge.v)
+                elif self.use_cache and (selected_edge.v, selected_edge.u) in self.orientation_cache_:
+                    edge_direction = (selected_edge.v, selected_edge.u)
+                else:
+                    edge_direction = self.orientation_fn(selected_edge.u, selected_edge.v)
+                    if self.use_cache is True and edge_direction is not None:
+                        self.orientation_cache_.add(edge_direction)
+
+                    if config.SHOW_PROGRESS and self.show_progress and edge_direction is not None:
+                        logger.info(
+                            "\rQueried for edge orientation between "
+                            f"{selected_edge.u} and {selected_edge.v}. Got: "
+                            f"{edge_direction[0]} -> {edge_direction[1]}"
+                        )
+
+                # Step 3.6: Handle the edge direction
+                # 1. If orientation function returns None, do not add the edge
+                # 2. If new edge creates a cycle, try to resolve it
+                # 3. Otherwise, add the edge
+                if edge_direction is None:
+                    logger.info(
+                        f"Orientation function returned None for edge {selected_edge.u} - {selected_edge.v}. "
+                        "Skipping this edge."
+                    )
+                    blacklisted_pairs.add(selected_pair_key)
+                elif nx.has_path(dag, edge_direction[1], edge_direction[0]):
+                    edges_to_remove = self._break_cycle(
+                        dag,
+                        edge_direction[0],
+                        edge_direction[1],
+                        ci_test=ci_test,
+                        data=X,
+                        effect_size_threshold=self.effect_size_threshold,
+                        pval_threshold=self.pval_threshold,
+                    )
+                    if len(edges_to_remove) == 0:
+                        logger.info(
+                            f"Couldn't resolve cycle created by edge {edge_direction[0]} -> {edge_direction[1]}. "
+                            "Skipping this edge."
+                        )
+                        blacklisted_pairs.add(selected_pair_key)
+                        if progress_bar is not None:
+                            progress_bar.update(1)
+                        continue
+
+                    blacklisted_pairs.update(
+                        self._pair_key(edge[0], edge[1], node_order=node_order) for edge in edges_to_remove
+                    )
+                    dag.remove_edges_from(edges_to_remove)
+                    dag.add_edges_from([(edge_direction[0], edge_direction[1])])
+                    if not nx.is_directed_acyclic_graph(dag):
+                        dag.remove_edge(edge_direction[0], edge_direction[1])
+                        blacklisted_pairs.add(selected_pair_key)
+                        logger.info(
+                            f"Edge {edge_direction[0]} -> {edge_direction[1]} still creates a cycle after resolution. "
+                            "Skipping this edge."
+                        )
+                else:
+                    dag.add_edges_from([edge_direction])
+
+                if progress_bar is not None:
+                    progress_bar.update(1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
 
         # Set the fitted attributes
         self.causal_graph_ = dag

@@ -265,6 +265,7 @@ def llm_pairwise_orient(
     descriptions,
     system_prompt=None,
     llm_model="gemini/gemini-1.5-flash",
+    api_base=None,
     **kwargs,
 ):
     """
@@ -286,10 +287,17 @@ def llm_pairwise_orient(
     system_prompt: str
         A system prompt to give the LLM.
 
-    llm_model: str (default: gemini/gemini-pro)
+    llm_model: str (default: gemini/gemini-1.5-flash)
         The LLM model to use. Please refer to litellm
           documentation (https://docs.litellm.ai/docs/providers)
-        for available model options. Default is gemini-pro.
+        for available model options. For local Ollama models, prefix the
+        model name with ``ollama/`` or ``ollama_chat/`` (e.g.
+        ``ollama/llama3.1:8b``).
+
+    api_base: str (default: None)
+        Base URL for the LLM endpoint. Required for local Ollama servers if
+        not on the default ``http://localhost:11434``. Forwarded to
+        ``litellm.completion``.
 
     kwargs: kwargs
         Any additional parameters to pass to litellm.completion method.
@@ -299,6 +307,8 @@ def llm_pairwise_orient(
     tuple:
         Returns a tuple (source, target) representing the edge direction.
     """
+    import re
+
     try:
         from litellm import completion
     except ImportError as e:
@@ -323,15 +333,28 @@ def llm_pairwise_orient(
         Return a single number (1 or 2) as your answer. I do not need the reasoning behind it.
         Do not add any formatting in the answer.
         """
-    response = completion(model=llm_model, messages=[{"role": "user", "content": prompt}])
-    response = response.choices[0].message.content
-    response_txt = response.strip().lower().replace("*", "")
-    if response_txt in ("a", "1"):
+    completion_kwargs = dict(kwargs)
+    if api_base is not None:
+        completion_kwargs["api_base"] = api_base
+    if llm_model.startswith(("ollama/", "ollama_chat/")):
+        completion_kwargs.setdefault("temperature", 0.0)
+
+    response = completion(
+        model=llm_model,
+        messages=[{"role": "user", "content": prompt}],
+        **completion_kwargs,
+    )
+    response_txt = response.choices[0].message.content.strip().lower().replace("*", "")
+
+    match = re.search(r"\b([12ab])\b", response_txt)
+    token = match.group(1) if match else response_txt
+
+    if token in ("a", "1"):
         return (x, y)
-    elif response_txt in ("b", "2"):
+    elif token in ("b", "2"):
         return (y, x)
     else:
-        raise ValueError("Results from the LLM are unclear. Try calling the function again.")
+        raise ValueError(f"Results from the LLM are unclear (got: {response_txt!r}). Try calling the function again.")
 
 
 def manual_pairwise_orient(x, y):
