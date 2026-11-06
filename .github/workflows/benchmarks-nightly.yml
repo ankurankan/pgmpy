@@ -1,0 +1,67 @@
+name: Benchmarks nightly
+
+concurrency:
+  group: benchmarks-nightly
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  benchmarks:
+    name: Benchmarks (all tiers)
+    if: github.repository == 'pgmpy/pgmpy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout pgmpy
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+          path: pgmpy
+
+      - name: Checkout pgmpy-benchmarks
+        uses: actions/checkout@v6
+        with:
+          repository: pgmpy/pgmpy-benchmarks
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.BENCHMARKS_PUSH_TOKEN }}
+          path: pgmpy-benchmarks
+
+      - name: Checkout benchmark results
+        uses: actions/checkout@v6
+        with:
+          repository: pgmpy/pgmpy-benchmarks
+          ref: results
+          token: ${{ secrets.BENCHMARKS_PUSH_TOKEN }}
+          path: results-store
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pgmpy-benchmarks/requirements-ci.txt
+
+      - name: Cache Hugging Face datasets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-pgmpy-benchmarks-v1
+
+      - name: Install benchmark tooling
+        run: pip install -r pgmpy-benchmarks/requirements-ci.txt
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "pgmpy-benchmarks-bot"
+          git config --global user.email "pgmpy-benchmarks-bot@users.noreply.github.com"
+
+      - name: Run benchmarks, publish results
+        working-directory: pgmpy-benchmarks
+        run: ci/nightly.sh ../results-store

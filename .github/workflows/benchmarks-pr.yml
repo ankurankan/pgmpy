@@ -1,0 +1,62 @@
+name: Benchmarks
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
+
+on:
+  pull_request:
+  merge_group:
+
+jobs:
+  benchmarks:
+    name: Benchmarks (fast tier)
+    # Also triggered by merge_group so the required check reports on merge-queue
+    # commits; the job itself only runs for pull requests.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout pgmpy
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: pgmpy
+
+      - name: Checkout pgmpy-benchmarks
+        uses: actions/checkout@v6
+        with:
+          repository: pgmpy/pgmpy-benchmarks
+          ref: master
+          path: pgmpy-benchmarks
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pgmpy-benchmarks/requirements-ci.txt
+
+      - name: Cache Hugging Face datasets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-pgmpy-benchmarks-v1
+
+      - name: Install benchmark tooling
+        run: pip install -r pgmpy-benchmarks/requirements-ci.txt
+
+      - name: Find merge base
+        id: base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: echo "sha=$(git -C pgmpy merge-base "$BASE_SHA" "$HEAD_SHA")" >> "$GITHUB_OUTPUT"
+
+      - name: Run fast-tier benchmarks and compare
+        working-directory: pgmpy-benchmarks
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ci/pr.sh "$BASE_SHA" "$HEAD_SHA"
