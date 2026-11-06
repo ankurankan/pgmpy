@@ -9,6 +9,9 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   benchmarks:
     name: Benchmarks (all tiers)
@@ -23,6 +26,7 @@ jobs:
           ref: dev
           fetch-depth: 0
           path: pgmpy
+          persist-credentials: false
 
       - name: Checkout pgmpy-benchmarks
         uses: actions/checkout@v6
@@ -52,7 +56,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: hf-pgmpy-benchmarks-v1
+          key: hf-pgmpy-benchmarks-${{ hashFiles('pgmpy-benchmarks/benchmarks/datasets.py') }}
+          restore-keys: hf-pgmpy-benchmarks-
 
       - name: Install benchmark tooling
         run: pip install -r pgmpy-benchmarks/requirements-ci.txt
